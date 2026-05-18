@@ -143,7 +143,7 @@ async def on_command_start(message: types.Message):
     await log_user_to_db(message.from_user.id)
     await message.answer(RULES_TEXT, parse_mode="HTML", reply_markup=get_main_keyboard(), disable_web_page_preview=True)
 
-# Окремий точковий обробник для скасування раунду (поставили на самий верх)
+# Окремий точковий обробник для скасування раунду
 @dp.callback_query(F.data == "cancel_last")
 async def cancel_last_round(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
@@ -157,9 +157,16 @@ async def cancel_last_round(callback: types.CallbackQuery):
         game["scores"][last_user] -= 1
         
     game["round"] = last_round
-    scores_text = "\n".join([f"{u}: {s}" for u, s in game["scores"].items()])
     
-    # Чистий вивід при скасуванні раунду
+    # Формуємо рахунок для відображення при скасуванні
+    if game["scores"]:
+        scores_text = "\n".join([f"{u}: {s}" for u, s in game["scores"].items()])
+        if len(game["scores"]) == 1:
+            scores_text += "\nГравець 2: 0"
+    else:
+        creator_name = game.get("creator", "Гравець 1")
+        scores_text = f"{creator_name}: 0\nГравець 2: 0"
+        
     task_text = f"Завдання: {last_round}\n\n{scores_text}"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -168,7 +175,6 @@ async def cancel_last_round(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="[ НОВА ГРА ДО 100 ]", callback_data="trigger_pay")],
         [InlineKeyboardButton(text="[ ДОДАТИ ГРАВЦІВ ]", callback_data="trigger_pay")]
     ])
-    # Фільтруємо порожні рядки з клавіатури, якщо вони виникли на 1 раунді
     kb.inline_keyboard = [row for row in kb.inline_keyboard if row]
     
     await callback.message.answer(task_text, reply_markup=kb)
@@ -188,13 +194,25 @@ async def process_callbacks(callback: types.CallbackQuery):
             return
             
         await log_chat_to_db(chat_id)
+        
+        # Отримуємо реальне ім'я того, хто натиснув кнопку "Нова гра"
+        creator_name = get_user_name(callback.from_user)
+        
         GAMES_DATA[chat_id] = {
             "status": "free",
             "round": 1,
+            "creator": creator_name,
             "scores": {},
             "history": []
         }
-        text = "Завдання: 1\n\nРахунок\nГравець 1: 0\nГравець 2: 0\n\nЗнайди і сфотографуй число 1."
+        
+        # Виводимо гарний стартовий шаблон із реальним ім'ям та замінником для другого гравця
+        text = (
+            "Завдання: 1\n\n"
+            f"{creator_name}: 0\n"
+            "Гравець 2: 0\n\n"
+            "Знайди і сфотографуй число 1."
+        )
         await callback.message.answer(text)
         await callback.answer()
 
@@ -258,7 +276,17 @@ async def handle_game_photo(message: types.Message):
     game["round"] += 1
     next_round = game["round"]
     
+    # Формуємо живий список результатів
     scores_text = "\n".join([f"{u}: {s}" for u, s in game["scores"].items()])
+    
+    # Якщо досі активний лише один гравець, підставляємо "Гравець 2: 0"
+    if len(game["scores"]) == 1:
+        creator = game.get("creator", "Гравець 1")
+        if creator not in game["scores"]:
+            scores_text = f"{creator}: 0\n" + scores_text
+        else:
+            scores_text += "\nГравець 2: 0"
+
     task_text = f"Завдання: {next_round}\n\n{scores_text}"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -296,6 +324,6 @@ async def on_startup():
         try:
             await bot.delete_webhook(drop_pending_updates=True)
             await bot.set_webhook(f"{BASE_URL}/webhook")
-            logger.info("Вебхук успешно перевстановлено!")
+            logger.info("Вебхук успішно перевстановлено!")
         except Exception as e:
             logger.error(f"Помилка встановлення вебхука: {e}")
