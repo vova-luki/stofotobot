@@ -2,23 +2,21 @@ import os
 import logging
 import asyncio
 import asyncpg
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Update
 
-# 1. Ініціалізація логування
+# 1. Налаштування логування
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 2. Ініціалізація FastAPI
-app = FastAPI()
-
-# 3. Зчитування конфігурації з Render
+# 2. Зчитування конфігурації з Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BASE_URL = os.getenv("BASE_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# 4. Ініціалізація компонентів Telegram
+# 3. Ініціалізація компонентів Telegram
 bot = None
 if BOT_TOKEN:
     bot = Bot(token=BOT_TOKEN)
@@ -26,8 +24,6 @@ else:
     logger.error("КРИТИЧНО: BOT_TOKEN відсутній у змінних оточення!")
 
 dp = Dispatcher()
-
-# Глобальна змінна для пулу з'єднань
 db_pool = None
 
 async def init_db():
@@ -43,12 +39,10 @@ async def init_db():
     except Exception as e:
         logger.error(f"Помилка підключення до бази даних: {e}")
 
-@app.on_event("startup")
-async def on_startup(app=None):
-    """ 
-    Старт сервера: додано параметр app=None, щоб уникнути TypeError 
-    у різних версіях FastAPI / Uvicorn.
-    """
+# 4. Новий сучасний життєвий цикл сервісу (замість on_event)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Код, який виконується ПРИ СТАРТІ сервера
     await init_db()
     
     if bot and BASE_URL:
@@ -60,10 +54,10 @@ async def on_startup(app=None):
             logger.error(f"Помилка встановлення вебхука Telegram: {e}")
     else:
         logger.error("Не вистачає BASE_URL або BOT_TOKEN для реєстрації вебхука!")
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    """ Зупинка сервера """
+        
+    yield  # Тут додаток працює
+    
+    # Код, який виконується ПРИ ЗУПИНЦІ сервера
     global db_pool
     if db_pool:
         await db_pool.close()
@@ -71,6 +65,10 @@ async def on_shutdown():
     if bot:
         await bot.session.close()
 
+# 5. Ініціалізація FastAPI з новим lifespan
+app = FastAPI(lifespan=lifespan)
+
+# 6. Обробники маршрутів
 @app.post("/webhook")
 async def webhook(update: dict):
     """ Прийом оновлень від Telegram """
