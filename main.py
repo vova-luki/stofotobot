@@ -24,31 +24,37 @@ def get_user_name(user: types.User) -> str:
 
 # --- ЛОГІКА ТЕЛЕГРАМ БОТА ---
 
-# 1. ТРИГЕР: ПІДКЛЮЧЕННЯ БОТА В ЧАТ (ПОСТ "ПРАВИЛА ГРИ" СУВОРO ЗА ДОКУМЕНТОМ)
+# 1. ТРИГЕР: ПІДКЛЮЧЕННЯ В ЧАТ АБО КОМАНДИ /start, /game, /play (ПРАВИЛА СУВОРO ЗА ДОКУМЕНТОМ)
 @dp.message(F.new_chat_members)
-async def on_bot_join(message: types.Message):
-    for member in message.new_chat_members:
-        if member.id == bot.id:
-            # Текст повністю без змін із твого файлу
-            rules_text = (
-                "Вітаємо у грі <a href='https://t.me/stophotobot'>100 PHOTO</a>!\n\n"
-                "Правила гри:\n\n"
-                "1. Завдання гравців – фотографувати числа (1, 2, 3...) і надсилати у цей чат.\n\n"
-                "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 фото. За кожне фото гравець отримує 1 бал.\n\n"
-                "3. Числа не можна створювати (викладати предметами) або писати самому. Лише фотографувати їх вдома, на вулиці тощо.\n\n"
-                "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). Локації мають бути різними.\n\n"
-                "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n\n"
-                "За бажанням, придумайте приз переможцю.\n\n"
-                "Натхнення!"
-            )
-            
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="[ НОВА ГРА ДО 10 ]", callback_data="start_free")],
-                [InlineKeyboardButton(text="[ НОВА ГРА ДО 100 ]", callback_data="trigger_pay")],
-                [InlineKeyboardButton(text="[ ДОДАТИ ГРАВЦІВ ]", callback_data="trigger_pay")]
-            ])
-            
-            await message.answer(rules_text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+@dp.message(F.text.in_({"/start", "/game", "/play", "Старт", "game", "play", "Start"}))  # Бот реагує на будь-яку з цих команд
+async def on_bot_join_or_command(message: types.Message):
+    # Якщо це подія входу нових учасників, реагуємо лише якщо додали нашого бота
+    if message.new_chat_members:
+        bot_added = any(member.id == bot.id for member in message.new_chat_members)
+        if not bot_added:
+            return
+
+    # Текст повністю без змін із твого файлу
+    rules_text = (
+        "Вітаємо у грі <a href='https://t.me/100photobot'>100PHOTO</a>!\n\n"
+        "Правила集 гри:\n\n"
+        "1. Завдання гравців – фотографувати числа (1, 2, 3...) і надсилати у цей чат.\n\n"
+        "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 фото. За кожне photo гравець отримує 1 бал.\n\n"
+        "3. Числа не можна створювати (викладати предметами) або писати самому. Лише фотографувати числа в кімнаті, в магазині, на вулиці тощо.\n\n"
+        "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, номери паркомісць тощо). Локації мають бути різними.\n\n"
+        "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n\n"
+        "Щоб перезапустити бота, напишіть в чат команду /start або /play.\n\n"
+        "За бажанням, придумайте приз переможцю.\n\n"
+        "Натхнення!"
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="[ НОВА ГРА ДО 10 ]", callback_data="start_free")],
+        [InlineKeyboardButton(text="[ НОВА ГРА ДО 100 ]", callback_data="trigger_pay")],
+        [InlineKeyboardButton(text="[ ДОДАТИ ГРАВЦІВ ]", callback_data="trigger_pay")]
+    ])
+    
+    await message.answer(rules_text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
 
 # 2. ОБРОБКА КЛІКІВ НА КНОПКИ
 @dp.callback_query()
@@ -180,7 +186,7 @@ async def cancel_last_round(callback: types.CallbackQuery):
     await callback.message.answer(task_text)
     await callback.answer("Останній раунд скасовано!")
 
-# 5. СУВОРЕ ІГНОРУВАННЯ БУДЬ-ЯКОГО ТЕКСТУ ЗА ТЗ
+# 5. СУВОРЕ ІГНОРУВАННЯ БУДЬ-ЯКОГО ІНШОГО ТЕКСТУ ЗА ТЗ
 @dp.message()
 async def ignore_text_messages(message: types.Message):
     pass
