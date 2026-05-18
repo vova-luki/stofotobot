@@ -22,7 +22,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 app = FastAPI()
 
-# Тимчасові дані для ігрового процесу в оперативці (щоб гра йшла швидко)
+# Тимчасові дані для ігрового процесу в оперативці
 GAMES_DATA = {} 
 ADMIN_ID = 124303561 
 
@@ -30,19 +30,17 @@ ADMIN_ID = 124303561
 async def init_db():
     """Створює таблиці в Supabase, якщо їх немає"""
     if not DATABASE_URL:
-        logger.error("DATABASE_URL не знайдено v змінних оточення!")
+        logger.error("DATABASE_URL не знайдено в змінних оточення!")
         return
     
     conn = await asyncpg.connect(DATABASE_URL)
     try:
-        # Таблиця для унікальних чатів
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS chats (
                 chat_id BIGINT PRIMARY KEY,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''');
-        # Таблиця для унікальних користувачів
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -56,27 +54,24 @@ async def init_db():
         await conn.close()
 
 async def log_chat_to_db(chat_id: int):
-    """Записує чат в базу, якщо його там немає"""
     if not DATABASE_URL: return
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute('INSERT INTO chats (chat_id) VALUES ($1) ON CONFLICT (chat_id) DO NOTHING', chat_id)
         await conn.close()
     except Exception as e:
-        logger.error(f"Помилка запису чату v БД: {e}")
+        logger.error(f"Помилка запису чату в БД: {e}")
 
 async def log_user_to_db(user_id: int):
-    """Записує користувача в базу, якщо він новий"""
     if not DATABASE_URL: return
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute('INSERT INTO users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING', user_id)
         await conn.close()
     except Exception as e:
-        logger.error(f"Помилка запису користувача v БД: {e}")
+        logger.error(f"Помилка запису користувача в БД: {e}")
 
 async def get_db_stats():
-    """Рахує унікальні дані з Supabase"""
     if not DATABASE_URL: return 0, 0
     try:
         conn = await asyncpg.connect(DATABASE_URL)
@@ -125,12 +120,12 @@ async def show_admin_stats(message: types.Message):
     active_users = sum(len(game["scores"]) for game in GAMES_DATA.values())
     stats_text = (
         "📊 **АКТУАЛЬНА СТАТИСТИКА БОТА (Supabase)**\n\n"
-        "🗄️ **Збережено v базі даних назавжди:**\n"
+        "🗄️ **Збережено в базі даних назавжди:**\n"
         f"├ Всього підключено чатів: {db_chats}\n"
         f"└ Всього унікальних людей: {db_users}\n\n"
-        "🚀 **Прямо зараз v реальному часі:**\n"
+        "🚀 **Прямо зараз в реальному часі:**\n"
         f"├ Активних сесій (ігор): {active_chats}\n"
-        f"└ Грає людей v цих чатах: {active_users}"
+        f"└ Грає людей в цих чатах: {active_users}"
     )
     await message.answer(stats_text, parse_mode="Markdown")
 
@@ -148,6 +143,38 @@ async def on_command_start(message: types.Message):
     await log_user_to_db(message.from_user.id)
     await message.answer(RULES_TEXT, parse_mode="HTML", reply_markup=get_main_keyboard(), disable_web_page_preview=True)
 
+# Окремий точковий обробник для скасування раунду (поставили на самий верх)
+@dp.callback_query(F.data == "cancel_last")
+async def cancel_last_round(callback: types.CallbackQuery):
+    chat_id = callback.message.chat.id
+    if chat_id not in GAMES_DATA or not GAMES_DATA[chat_id]["history"]:
+        await callback.answer("Немає раундів для скасування!", show_alert=True)
+        return
+        
+    game = GAMES_DATA[chat_id]
+    last_user, last_round = game["history"].pop()
+    if last_user in game["scores"] and game["scores"][last_user] > 0:
+        game["scores"][last_user] -= 1
+        
+    game["round"] = last_round
+    scores_text = "\n".join([f"{u}: {s}" for u, s in game["scores"].items()])
+    
+    # Чистий вивід при скасуванні раунду
+    task_text = f"Завдання: {last_round}\n\n{scores_text}"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"[ ОБНУЛИТИ РАУНД {last_round-1} ]", callback_data="cancel_last")] if last_round > 1 else [],
+        [InlineKeyboardButton(text="[ НОВА ГРА ДО 10 ]", callback_data="start_free")],
+        [InlineKeyboardButton(text="[ НОВА ГРА ДО 100 ]", callback_data="trigger_pay")],
+        [InlineKeyboardButton(text="[ ДОДАТИ ГРАВЦІВ ]", callback_data="trigger_pay")]
+    ])
+    # Фільтруємо порожні рядки з клавіатури, якщо вони виникли на 1 раунді
+    kb.inline_keyboard = [row for row in kb.inline_keyboard if row]
+    
+    await callback.message.answer(task_text, reply_markup=kb)
+    await callback.answer("Останній раунд скасовано!")
+
+# Загальний обробник для інших кнопок меню
 @dp.callback_query()
 async def process_callbacks(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
@@ -155,10 +182,9 @@ async def process_callbacks(callback: types.CallbackQuery):
     
     if callback.data == "start_free":
         chat_member_count = await bot.get_chat_member_count(chat_id)
-        # Враховуємо бота: ліміт активовується тільки якщо реальних людей більше 2 (загальна к-сть > 3)
         if chat_member_count > 3:
             await show_payment_post(chat_id)
-            await callback.answer()  # Просто гасимо годинник на кнопці без спливаючого вікна
+            await callback.answer()
             return
             
         await log_chat_to_db(chat_id)
@@ -231,8 +257,9 @@ async def handle_game_photo(message: types.Message):
 
     game["round"] += 1
     next_round = game["round"]
+    
     scores_text = "\n".join([f"{u}: {s}" for u, s in game["scores"].items()])
-    task_text = f"Завдання: {next_round}\n\n{scores_text}\n\nЗнайди і сфотографуй число {next_round}."
+    task_text = f"Завдання: {next_round}\n\n{scores_text}"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"[ ОБНУЛИТИ РАУНД {next_round-1} ]", callback_data="cancel_last")],
@@ -241,24 +268,6 @@ async def handle_game_photo(message: types.Message):
         [InlineKeyboardButton(text="[ ДОДАТИ ГРАВЦІВ ]", callback_data="trigger_pay")]
     ])
     await message.answer(task_text, reply_markup=kb)
-
-@dp.callback_query(F.data == "cancel_last")
-async def cancel_last_round(callback: types.CallbackQuery):
-    chat_id = callback.message.chat.id
-    if chat_id not in GAMES_DATA or not GAMES_DATA[chat_id]["history"]:
-        await callback.answer("Немає раундів для скасування!", show_alert=True)
-        return
-        
-    game = GAMES_DATA[chat_id]
-    last_user, last_round = game["history"].pop()
-    if last_user in game["scores"] and game["scores"][last_user] > 0:
-        game["scores"][last_user] -= 1
-        
-    game["round"] = last_round
-    scores_text = "\n".join([f"{u}: {s}" for u, s in game["scores"].items()])
-    task_text = f"Раунд скасовано!\n\nЗавдання: {last_round}\n\n{scores_text}\n\nЗнайди і сфотографуй число {last_round}."
-    await callback.message.answer(task_text)
-    await callback.answer("Останній раунд скасовано!")
 
 @dp.message()
 async def ignore_text_messages(message: types.Message):
@@ -283,10 +292,10 @@ async def root():
 async def on_startup():
     await init_db()
     if BASE_URL:
-        logger.info("Оновлення вебхука v Telegram...")
+        logger.info("Оновлення вебхука в Telegram...")
         try:
             await bot.delete_webhook(drop_pending_updates=True)
             await bot.set_webhook(f"{BASE_URL}/webhook")
-            logger.info("Вебхук успішно перевстановлено!")
+            logger.info("Вебхук успешно перевстановлено!")
         except Exception as e:
             logger.error(f"Помилка встановлення вебхука: {e}")
