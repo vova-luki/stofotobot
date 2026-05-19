@@ -1,6 +1,8 @@
 import os
 import logging
 import asyncio
+import threading
+from http.server import SimpleHTTPRequestHandler, HTTPServer
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -24,12 +26,25 @@ logger = logging.getLogger(__name__)
 # Константи конфігурації
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+PORT = int(os.getenv("PORT", 10000))
 ADMIN_ID = 453664724  # Твій Telegram ID для команди /stat
 
-# Прямі лінки на картинки у твоєму репозиторії Render
+# Прямі лінки на картинки (вони тепер роздаються цим же сервером)
 PHOTO_RULES = "https://stophotobot.onrender.com/1.png"
 PHOTO_START = "https://stophotobot.onrender.com/2.png"
 PHOTO_END = "https://stophotobot.onrender.com/3.png"
+
+# --- ФЕЙКОВИЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ---
+def run_http_server():
+    class QuietHandler(SimpleHTTPRequestHandler):
+        def log_message(self, format, *args):
+            # Вимикаємо зайві логи запитів у консолі
+            return
+
+    server_address = ('', PORT)
+    httpd = HTTPServer(server_address, QuietHandler)
+    logger.info(f"Вбудований веб-сервер запущено на порту {PORT}")
+    httpd.serve_forever()
 
 # Підключення до бази даних Supabase (PostgreSQL)
 def get_db_connection():
@@ -86,7 +101,6 @@ def render_scores(scores_dict, is_round_one=False):
     if not scores_dict:
         return "Немає активних гравців"
     
-    # Сортуємо за спаданням балів
     sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
     return "\n".join([f"{user}: {score}" for user, score in sorted_scores])
 
@@ -95,27 +109,24 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
-    # Зберігаємо юзера в базу
     db_upsert_user(user.id, user.username, user.full_name)
     
-    # Текст правил з гіперпосиланням
     rules_text = (
         "Вітаємо у грі <a href='https://t.me/stophotobot'>100 PHOTO</a>!\n\n"
-        "Правила集 гри:\n\n"
+        "Правила гри:\n\n"
         "1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у цей чат.\n"
-        "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 фото.\n"
-        "За кожне photo гравець отримує 1 бал.\n\n"
+        "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 photo.\n"
+        "За кожне фото гравець отримує 1 бал.\n\n"
         "3. Числа не можна створювати (викладати предметами) або писати самому. "
         "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). "
         "Локації мають бути різними.\n\n"
-        "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n"
+        "5. Якщо надіслане foto не відповідає правилам, це фото можна відмінити і почати раунд заново.\n"
         "Щоб перезапустити бота, напишіть в чат команду /start або /play.\n\n"
         "За бажанням, придумайте приз переможцю.\n\n"
         "Натхнення!"
     )
     
-    # Кнопки для повідомлення відповідно до FREE-версії ТЗ
     keyboard = [
         [InlineKeyboardButton("[ НОВА ГРА ДО 10 ]", callback_data="new_game_10")],
         [InlineKeyboardButton("[ НОВА ГРА ДО 100 ]", callback_data="buy_pro")],
@@ -132,7 +143,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Помилка відправки фото правил: {e}")
-        # Запасний варіант, якщо картинка не підвантажилась з сервера Render
         await chat.send_message(text=rules_text, parse_mode="HTML", reply_markup=reply_markup)
 
 # Обробка натискань на кнопки
@@ -144,7 +154,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     data = query.data
     
-    # Зберігаємо того, хто натиснув кнопку
     db_upsert_user(user.id, user.username, user.full_name)
     
     if data == "new_game_10":
@@ -260,7 +269,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     scores = game['scores'] or {}
     history = game['history'] or []
     
-    # Пріоритет: first_name (як у профілі), якщо порожньо — @username
     user_display = user.first_name if user.first_name else f"@{user.username}"
     
     scores[user_display] = scores.get(user_display, 0) + 1
@@ -348,6 +356,10 @@ async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Помилка збору статистики: {e}")
 
 def main():
+    # Запускаємо HTTP-сервер в окремому потоці, щоб він не заважав боту
+    threading.Thread(target=run_http_server, daemon=True).start()
+
+    # Запуск Telegram бота
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler(["start", "play"], start_command))
