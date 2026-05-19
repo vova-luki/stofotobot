@@ -25,7 +25,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Токен, який прописаний у Render env
+# Токен та конфігурація з Render env
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 PORT = int(os.getenv("PORT", 10000))
@@ -47,7 +47,7 @@ def run_http_server():
     logger.info(f"Вбудований веб-сервер запущено на порту {PORT}")
     httpd.serve_forever()
 
-# Безпечне підключення до бази даних
+# Підключення до бази даних
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
@@ -91,7 +91,7 @@ def db_save_game(chat_id, state, max_rounds, current_round, scores, history):
     except Exception as e:
         logger.error(f"Помилка save_game: {e}")
 
-# Генерація списку рахунку без зайвих пробілів та порожніх рядків всередині
+# Генерація списку рахунку без зайвих пробілів
 def render_scores(scores_dict, is_round_one=False):
     if is_round_one:
         return "player 1: 0\nplayer 2: 0"
@@ -101,13 +101,13 @@ def render_scores(scores_dict, is_round_one=False):
     sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
     return "\n".join([f"{user}: {score}" for user, score in sorted_scores])
 
-# Пост "ПРАВИЛА" з твого файлу
+# Пост "ПРАВИЛА"
 async def send_welcome_rules(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     rules_text = (
         "Вітаємо у грі <a href='https://t.me/stophotobot'>100 PHOTO</a>!\n\n"
         "Правила гри:\n\n"
         "1. Завдання гравців – фотографувати числа (1, 2, 3) i надсилати у цей чат.\n\n"
-        "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 фото.\n"
+        "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 photo.\n"
         "За кожне фото гравець отримує 1 бал.\n\n"
         "3. Числа не можна створювати (викладати предметами) або писати самому.\n"
         "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
@@ -160,7 +160,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "new_game_10":
         db_save_game(chat_id, "RUNNING_FREE", 10, 1, {}, [])
         
-        # ПОСТ "ЗАВДАННЯ 1" — просто нове повідомлення (без reply та без кнопок)
+        # ПОСТ "ЗАВДАННЯ 1" — як окреме чисте повідомлення без reply та без кнопок
         caption = (
             "Завдання: 1\n\n"
             "Рахунок\n"
@@ -181,7 +181,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         keyboard = [
             [InlineKeyboardButton("[ КУПИТИ PRO-ВЕРСІЮ ]", callback_data="success_pay")],
-            [InlineKeyboardButton("[ ПРОДОВЖИТИ ГРУ УДВОХ ]", callback_data="new_game_10")]
+            [InlineKeyboardButton("[ ПРОДОВЖТИ ГРУ УДВОХ ]", callback_data="new_game_10")]
         ]
         await context.bot.send_message(chat_id=chat_id, text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
         
@@ -240,7 +240,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
         prev_round = max(1, current_round - 1)
         db_save_game(chat_id, game['state'], game['max_rounds'], prev_round, scores, history)
-        await context.bot.send_message(chat_id=chat_id, text=f"Раунд {prev_round} було обнулено! Надішліть правильне photo заново.")
+        await context.bot.send_message(chat_id=chat_id, text=f"Раунд {prev_round} було обнулено! Надішліть правильне фото заново.")
 
     elif data == "add_players":
         await context.bot.send_message(chat_id=chat_id, text="Щоб додати гравців, просто додайте їх безпосередньо у групу Telegram.")
@@ -262,7 +262,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_display = f"@{user.username}" if user.username else user.first_name
     
-    # Плюсуємо бал гравцю
     scores[user_display] = scores.get(user_display, 0) + 1
     history.append({'round': current_round, 'user': user_display, 'time': datetime.now().isoformat()})
     
