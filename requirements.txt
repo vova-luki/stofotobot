@@ -3,3 +3,4 @@ cachetools==5.3.3
 aiohttp
 fastapi==0.110.0
 uvicorn==0.28.0
+supabase
