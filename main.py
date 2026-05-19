@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -49,20 +49,6 @@ def db_upsert_user(telegram_id, username, full_name):
                 conn.commit()
     except Exception as e:
         logger.error(f"Помилка upsert_user: {e}")
-
-# Перевірка PRO статусу (хоча б один користувач у чаті має бути PRO)
-def db_is_chat_pro(chat_id):
-    # Для простоти, якщо гра створена як PRO або ініціатор PRO, зберігаємо стан в базі
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT state FROM games WHERE chat_id = %s", (chat_id,))
-                res = cur.fetchone()
-                if res and 'PRO' in res['state']:
-                    return True
-    except Exception as e:
-        logger.error(f"Помилка перевірки PRO статусу: {e}")
-    return False
 
 # Отримання стану гри
 def db_get_game(chat_id):
@@ -115,10 +101,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Текст правил з гіперпосиланням
     rules_text = (
         "Вітаємо у грі <a href='https://t.me/stophotobot'>100 PHOTO</a>!\n\n"
-        "Правила гри:\n\n"
+        "Правила集 гри:\n\n"
         "1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у цей чат.\n"
-        "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 photo.\n"
-        "За кожне фото гравець отримує 1 бал.\n\n"
+        "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 фото.\n"
+        "За кожне photo гравець отримує 1 бал.\n\n"
         "3. Числа не можна створювати (викладати предметами) або писати самому. "
         "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). "
@@ -129,7 +115,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Натхнення!"
     )
     
-    # Кнопки для повідомлення
+    # Кнопки для повідомлення відповідно до FREE-версії ТЗ
     keyboard = [
         [InlineKeyboardButton("[ НОВА ГРА ДО 10 ]", callback_data="new_game_10")],
         [InlineKeyboardButton("[ НОВА ГРА ДО 100 ]", callback_data="buy_pro")],
@@ -137,12 +123,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await chat.send_photo(
-        photo=PHOTO_RULES,
-        caption=rules_text,
-        parse_mode="HTML",
-        reply_markup=reply_markup
-    )
+    try:
+        await chat.send_photo(
+            photo=PHOTO_RULES,
+            caption=rules_text,
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        logger.error(f"Помилка відправки фото правил: {e}")
+        # Запасний варіант, якщо картинка не підвантажилась з сервера Render
+        await chat.send_message(text=rules_text, parse_mode="HTML", reply_markup=reply_markup)
 
 # Обробка натискань на кнопки
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -157,7 +148,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_upsert_user(user.id, user.username, user.full_name)
     
     if data == "new_game_10":
-        # Ініціалізуємо FREE гру до 10 раундів
         db_save_game(chat_id, "RUNNING_FREE", 10, 1, {}, [])
         
         caption = (
@@ -172,14 +162,12 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("[ НОВА ГРА ДО 100 ]", callback_data="buy_pro")],
             [InlineKeyboardButton("[ ДОДАТИ ГРАВЦІВ ]", callback_data="add_players")]
         ]
-        await query.message.reply_photo(
-            photo=PHOTO_START,
-            caption=caption,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        try:
+            await query.message.reply_photo(photo=PHOTO_START, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception:
+            await query.message.reply_text(text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
         
     elif data == "buy_pro":
-        # Екрани оплати
         caption = (
             "Pro-версія гри:\n"
             "- до 10 гравців\n"
@@ -187,13 +175,12 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "- у всіх чатах Pro-гравця"
         )
         keyboard = [
-            [InlineKeyboardButton("[ КУПИТИ PRO-ВЕРСІЮ ]", callback_data="success_pay")], # Тимчасово для тесту переводить на успіх
+            [InlineKeyboardButton("[ КУПИТИ PRO-ВЕРСІЮ ]", callback_data="success_pay")],
             [InlineKeyboardButton("[ ПРОДОВЖИТИ ГРУ УДВОХ ]", callback_data="new_game_10")]
         ]
         await query.message.reply_text(caption, reply_markup=InlineKeyboardMarkup(keyboard))
         
     elif data == "success_pay":
-        # Емуляція успішної оплати, ставимо користувачу PRO статус у базі
         try:
             with get_db_connection() as conn:
                 with conn.cursor() as cur:
@@ -202,9 +189,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(e)
             
+        display_name = f"@{user.username}" if user.username else user.first_name
         caption = (
             "Дякую, оплата є!\n"
-            f"– @{user.username or user.first_name} тепер Pro\n"
+            f"– {display_name} тепер Pro\n"
             "– відкрито 100 раундів\n"
             "– відкрито 10 гравців"
         )
@@ -212,7 +200,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(caption, reply_markup=InlineKeyboardMarkup(keyboard))
         
     elif data == "new_game_pro":
-        # Запуск PRO гри
         db_save_game(chat_id, "RUNNING_PRO", 100, 1, {}, [])
         caption = (
             "Завдання: 1\n\n"
@@ -224,11 +211,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("[ ОБНУЛИТИ РАУНД 0 ]", callback_data="void_round")],
             [InlineKeyboardButton("[ ПОЧАТИ ЗАНОВО ]", callback_data="new_game_pro")]
         ]
-        await query.message.reply_photo(
-            photo=PHOTO_START,
-            caption=caption,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        try:
+            await query.message.reply_photo(photo=PHOTO_START, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception:
+            await query.message.reply_text(text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
         
     elif data == "void_round":
         game = db_get_game(chat_id)
@@ -244,7 +230,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("Немає дій для скасування в цьому раунді.")
             return
             
-        # Скасовуємо останній бал з історії раунду
         last_action = history.pop()
         last_user = last_action.get('user')
         
@@ -253,11 +238,8 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if scores[last_user] == 0:
                 del scores[last_user]
                 
-        # Знижуємо раунд назад, якщо він уже встиг перемкнутися
         prev_round = max(1, current_round - 1)
-        
         db_save_game(chat_id, game['state'], game['max_rounds'], prev_round, scores, history)
-        
         await query.message.reply_text(f"Раунд {prev_round} було обнулено! Надішліть правильне фото заново.")
 
     elif data == "add_players":
@@ -270,7 +252,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     game = db_get_game(chat_id)
     if not game or game['state'] == 'IDLE':
-        return # Гри немає, ігноруємо фото
+        return
         
     state = game['state']
     max_rounds = game['max_rounds']
@@ -278,17 +260,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     scores = game['scores'] or {}
     history = game['history'] or []
     
-    # Визначаємо ім'я користувача для виведення на екран
+    # Пріоритет: first_name (як у профілі), якщо порожньо — @username
     user_display = user.first_name if user.first_name else f"@{user.username}"
     
-    # Нараховуємо 1 бал
     scores[user_display] = scores.get(user_display, 0) + 1
-    
-    # Додаємо в історію для можливості скасування
     history.append({'round': current_round, 'user': user_display, 'time': datetime.now().isoformat()})
     
     if current_round >= max_rounds:
-        # Кінець гри
         winner = max(scores, key=scores.get) if scores else user_display
         caption = (
             f"Переможець: {winner}\n\n"
@@ -310,16 +288,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             
         db_save_game(chat_id, "IDLE", max_rounds, current_round, scores, history)
-        await update.message.reply_photo(photo=PHOTO_END, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
+        try:
+            await update.message.reply_photo(photo=PHOTO_END, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception:
+            await update.message.reply_text(text=caption, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        # Наступний раунд
         next_round = current_round + 1
         db_save_game(chat_id, state, max_rounds, next_round, scores, history)
         
         caption = (
             f"Завдання: {next_round}\n\n"
+            "Рахунок:\n"
             f"{render_scores(scores)}\n\n"
-            f"[ ОБНУЛИТИ РАУНД {next_round-1} ]\n"
             f"Знайди і сфотографуй число {next_round}."
         )
         if "FREE" in state:
@@ -340,12 +320,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Команда /stat для адміна
 async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return # Доступ лише для адміна
+        return
         
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
-                # Збір метрик з бази даних
                 cur.execute("SELECT COUNT(*) FROM games")
                 total_chats = cur.fetchone()['count']
                 
@@ -362,10 +341,9 @@ async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Всього чатів: {total_chats}\n"
                     f"Всього користувачів: {total_users}\n"
                     f"Безкоштовних користувачів: {free_users}\n"
-                    f"PRO користувачів: {pro_users}\n\n"
-                    "*(Дані накопичуються з моменту запуску Supabase)*"
+                    f"PRO користувачів: {pro_users}\n"
                 )
-                await update.message.reply_text(stat_text, parse_mode="Markdown")
+                await update.message.reply_text(stat_text)
     except Exception as e:
         await update.message.reply_text(f"Помилка збору статистики: {e}")
 
@@ -377,7 +355,6 @@ def main():
     application.add_handler(CallbackQueryHandler(button_click))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    # Запуск довгого опитування (Long Polling)
     application.run_polling()
 
 if __name__ == '__main__':
