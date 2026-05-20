@@ -1,7 +1,6 @@
-python-telegram-bot[webhooks]==21.1.1
-cachetools
-aiohttp
 fastapi==0.110.0
 uvicorn==0.28.0
-supabase
-asyncpg
+aiogram==3.4.1
+asyncpg==0.29.0
+pydantic==2.6.4
+pydantic-settings==2.2.1
