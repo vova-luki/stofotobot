@@ -98,7 +98,7 @@ async def send_welcome_rules(chat_id: int):
             "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
             "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо).\n"
             "Локації мають бути різними.\n\n"
-            "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n"
+            "5. Якщо надіслане photo не відповідає правилам, це фото можна відмінити і почати раунд заново.\n"
             "Щоб перезапустити бота, напишіть в чат команду /start або /play.\n\n"
             "За бажанням, придумайте приз переможцю.\n\n"
             "Натхнення!"
@@ -209,7 +209,7 @@ async def handle_photo(message: types.Message):
         await message.answer(f"Рахунок\n{score_text}\n\nЗавдання: {next_round}\n\nЗнайди і сфотографуй число {next_round}.", reply_markup=kb)
 
 # Надійне відслідковування додавання бота в групу через aiogram 3.x фільтр
-@dp.my_chat_member(ChatMemberUpdatedFilter(member_change=JOIN_TRANSITION))
+@dp.my_chat_member(ChatMemberUpdatedFilter(chat_member_transition=JOIN_TRANSITION))
 async def on_bot_join(event: ChatMemberUpdated):
     await send_welcome_rules(event.chat.id)
 
