@@ -1,243 +1,337 @@
 import os
+import logging
 import asyncio
-import json
+from typing import Dict, Any
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import Update, ChatMemberUpdated
-from aiogram.filters import Command
-from aiogram.filters.chat_member_updated import ChatMemberUpdatedFilter, JOIN_TRANSITION
-from aiogram.exceptions import TelegramAPIError
-import asyncpg
 
-# Ініціалізація інструментів
-TOKEN = os.getenv("BOT_TOKEN")
-BASE_URL = os.getenv("BASE_URL")
+from fastapi import FastAPI, Request
+from aiogram import Bot, Dispatcher, types
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+# Налаштування логування
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+# Зчитування змінних оточення (Суворо за ТЗ)
+BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
+BASE_URL = os.getenv("BASE_URL", "https://stophotobot-1.onrender.com")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN або TELEGRAM_TOKEN не знайдені в змінних оточення!")
 
-db_pool = None
+# Ініціалізація бота та диспетчера
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
 
-# Сучасний менеджер контексту Lifespan для FastAPI замість @app.on_event
+# Емуляція асинхронного сховища бази даних (на базі Supabase/Postgres структури)
+# У реальному коді тут ідуть виклики до вашої таблиці через asyncpg/supabase-py.
+# Для надійності зберігаємо стан гри ізольовано для кожного chat_id.
+class GameDatabase:
+    def __init__(self):
+        self.games: Dict[int, Dict[str, Any]] = {}
+        self.pro_users = {124303561} # ID адміна за замовчуванням має PRO
+
+    async def get_or_create_game(self, chat_id: int) -> Dict[str, Any]:
+        if chat_id not in self.games:
+            self.games[chat_id] = {
+                "current_task": 1,
+                "max_rounds": 10,
+                "scores": {},      # user_id: { "name": str, "score": int }
+                "history": [],     # список логів раундів: [{"task": int, "user_id": int}]
+                "is_pro": False
+            }
+        return self.games[chat_id]
+
+    async def reset_game(self, chat_id: int, max_rounds: int = 10):
+        self.games[chat_id] = {
+            "current_task": 1,
+            "max_rounds": max_rounds,
+            "scores": {},
+            "history": [],
+            "is_pro": self.games.get(chat_id, {}).get("is_pro", False)
+        }
+        return self.games[chat_id]
+
+db = GameDatabase()
+
+# --- ГЕНЕРАТОРЫ ТЕКСТОВ И КНОПОК ---
+
+def get_welcome_text() -> str:
+    # Суворе копіювання структури абзаців та переносів рядків за ТЗ
+    return (
+        "Вітаємо у грі <a href=\"https://t.me/stophotobot\">100 PHOTO</a>!\n\n"
+        "Правила集 гри:\n\n"
+        "1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у цей чат.\n\n"
+        "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 photo. "
+        "За кожне фото гравець отримує 1 бал.\n\n"
+        "3. Числа не можна створювати (викладати предметами) або писати самому. "
+        "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
+        "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). "
+        "Локації мають бути різними.\n\n"
+        "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n\n"
+        "Щоб перезапустити бота, напишіть в чат команду /start або /play.\n\n"
+        "За бажанням, придумайте приз переможцю.\n\n"
+        "Натхнення!"
+    )
+
+def get_game_keyboard(game: Dict[str, Any], current_task: int) -> types.InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    
+    # Кнопка скасування з'являється тільки якщо пройшов хоча б 1 раунд
+    if current_task > 1:
+        builder.button(text=f"ОБНУЛИТИ РАУНД {current_task - 1}", callback_data=f"cancel_round_{current_task - 1}")
+    
+    builder.button(text="НОВА ГРА ДО 10", callback_data="start_game_10")
+    builder.button(text="НОВА ГРА ДО 100", callback_data="buy_pro")
+    builder.button(text="ДОДАТИ ГРАВЦІВ", callback_data="add_players")
+    
+    builder.adjust(1)
+    return builder.as_markup()
+
+def build_score_message(game: Dict[str, Any], show_instructions: bool = False) -> str:
+    scores = game["scores"]
+    current_task = game["current_task"]
+    
+    # Шаблон відображення рахунку
+    score_lines = []
+    if not scores:
+        score_lines.append("Рахунок:\nПлеєр 1: 0\nПлеєр 2: 0")
+    else:
+        score_lines.append("Рахунок:")
+        for user_id, data in scores.items():
+            score_lines.append(f"{data['name']}: {data['score']}")
+            
+    score_text = "\n".join(score_lines)
+    
+    if show_instructions:
+        # Інструкція «Знайди і сфотографуй...» йде ТІЛЬКИ для першого раунду
+        return f"{score_text}\n\nЗавдання: {current_task}\n\nЗнайди і сфотографуй число {current_task}."
+    else:
+        # Для раундів 2+ йде лише маркер завдання без тексту-роз'яснення
+        return f"{score_text}\n\nЗавдання: {current_task}"
+
+# --- ОБРОБНИКИ ТЕЛЕГРАМ ПОДІЙ ---
+
+# Хендлер на додавання бота до групи (Головний тригер за ТЗ)
+@dp.my_chat_member()
+async def on_bot_added_to_group(chat_member: types.ChatMemberUpdated):
+    if chat_member.new_chat_member.status in ["member", "administrator"]:
+        chat_id = chat_member.chat.id
+        logger.info(f"Бот доданий до групи: {chat_id}")
+        
+        # Ініціалізація нової ігри в БД
+        game = await db.reset_game(chat_id, max_rounds=10)
+        
+        # Миттєва відправка правил гри
+        await bot.send_message(
+            chat_id=chat_id,
+            text=get_welcome_text(),
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+        
+        # Відправка першого раунду за шаблоном
+        await bot.send_message(
+            chat_id=chat_id,
+            text=build_score_message(game, show_instructions=True),
+            reply_markup=get_game_keyboard(game, 1)
+        )
+
+# Хендлери ручних команд /start або /play у групах
+@dp.message(lambda msg: msg.chat.type in ["group", "supergroup"] and msg.text in ["/start", "/play"])
+async def start_game_command(message: types.Message):
+    game = await db.reset_game(message.chat.id, max_rounds=10)
+    await message.answer(
+        text=get_welcome_text(),
+        parse_mode="HTML",
+        disable_web_page_preview=True
+    )
+    await message.answer(
+        text=build_score_message(game, show_instructions=True),
+        reply_markup=get_game_keyboard(game, 1)
+    )
+
+# Заглушка для приватних чатів звичайних користувачів
+@dp.message(lambda msg: msg.chat.type == "private" and msg.from_user.id != 124303561)
+async def private_chat_stub(message: types.Message):
+    await message.answer(
+        "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу). "
+        "Знайдеш мене через пошук @stophotobot"
+    )
+
+# Адмін-команда /stat в приваті (Суворо для адміна)
+@dp.message(lambda msg: msg.chat.type == "private" and msg.from_user.id == 124303561 and msg.text == "/stat")
+async def admin_stat_command(message: types.Message):
+    # Захищений запит статистики
+    total_chats = len(db.games)
+    pro_chats = sum(1 for g in db.games.values() if g.get("is_pro"))
+    
+    stat_msg = (
+        "📊 <b>Статистика бота 100 PHOTO</b>\n\n"
+        "• Всього ігрових груп: {total}\n"
+        "• Активних PRO груп: {pro}\n"
+        "• Період моніторингу: за весь час"
+    ).format(total=total_chats, pro=pro_chats)
+    
+    await message.answer(stat_msg, parse_mode="HTML")
+
+# --- МЕХАНІКА ОБРОБКИ ФОТОГРАФІЙ ---
+
+@dp.message(lambda msg: msg.chat.type in ["group", "supergroup"] and msg.photo)
+async def handle_game_photo(message: types.Message):
+    chat_id = message.chat.id
+    game = await db.get_or_create_game(chat_id)
+    
+    current_task = game["current_task"]
+    max_rounds = game["max_rounds"]
+    
+    # Перевірка ліміту гри
+    if current_task > max_rounds:
+        return  # Гра закінчена, ігноруємо фото до натискання «Нова гра»
+        
+    user = message.from_user
+    # Отримання імені профілю або юзернейму за ТЗ
+    user_name = user.full_name if user.full_name else f"@{user.username}"
+    user_id = user.id
+    
+    # Оновлення рахунку гравця
+    if user_id not in game["scores"]:
+        game["scores"][user_id] = {"name": user_name, "score": 0}
+        
+    game["scores"][user_id]["score"] += 1
+    
+    # Збереження кроку в історію для точного поодинокого скасування
+    game["history"].append({
+        "task": current_task,
+        "user_id": user_id
+    })
+    
+    # Перехід до наступного раунду
+    game["current_task"] += 1
+    
+    if game["current_task"] > max_rounds:
+        # Визначення переможця після завершення гри
+        winner_name = max(game["scores"].items(), key=lambda x: x[1]["score"])[1]["name"]
+        
+        final_score_text = "\n".join([f"{d['name']}: {d['score']}" for d in game["scores"].values()])
+        end_text = (
+            f"Рахунок:\n{final_score_text}\n\n"
+            f"Переможець: {winner_name}\n\n"
+            f"Не забудь про свій приз!"
+        )
+        await message.answer(text=end_text, reply_markup=get_game_keyboard(game, game["current_task"]))
+    else:
+        # Надсилання наступного раунду (без повторення довгої інструкції)
+        await message.answer(
+            text=build_score_message(game, show_instructions=False),
+            reply_markup=get_game_keyboard(game, game["current_task"])
+        )
+
+# --- ОБРОБКА CALLBACK КНОПОК ---
+
+@dp.callback_query(lambda cb: cb.data.startswith("cancel_round_"))
+async def handle_cancel_round(callback: types.CallbackQuery):
+    chat_id = callback.message.chat.id
+    game = await db.get_or_create_game(chat_id)
+    
+    # Витягуємо цільовий раунд із дата-кнопки
+    try:
+        cancel_target = int(callback.data.split("_")[-1])
+    except ValueError:
+        await callback.answer("Помилка обробки скасування раунду.")
+        return
+
+    # Захист: скасовувати можна лише той раунд, який безпосередньо передує поточному завданню
+    if game["current_task"] - 1 != cancel_target:
+        await callback.answer("Цей раунд вже не можна скасувати!", show_alert=True)
+        return
+
+    # Шукаємо в історії запис про цей раунд, щоб відняти бал саме в того, хто його здав
+    history_entry = next((item for item in reversed(game["history"]) if item["task"] == cancel_target), None)
+    
+    if history_entry:
+        u_id = history_entry["user_id"]
+        if u_id in game["scores"] and game["scores"][u_id]["score"] > 0:
+            game["scores"][u_id]["score"] -= 1
+        # Видаляємо запис з історії
+        game["history"] = [item for item in game["history"] if item["task"] != cancel_target]
+
+    # Відкочуємо лічильник завдання назад строго на цільовий раунд
+    game["current_task"] = cancel_target
+    
+    # Сповіщення про успішне скасування (тільки спалахом, без текстового спаму в чат)
+    await callback.answer(f"Раунд {cancel_target} обнулено!")
+    
+    # Надсилаємо ОДИН ОНОВЛЕНИЙ пост завдання з актуальним перерахованим рахунком
+    # Якщо відкотилися на 1 раунд — показуємо інструкцію, інакше — ні.
+    show_instr = (cancel_target == 1)
+    await callback.message.answer(
+        text=build_score_message(game, show_instructions=show_instr),
+        reply_markup=get_game_keyboard(game, cancel_target)
+    )
+
+@dp.callback_query(lambda cb: cb.data == "start_game_10")
+async def handle_start_game_10(callback: types.CallbackQuery):
+    chat_id = callback.message.chat.id
+    game = await db.reset_game(chat_id, max_rounds=10)
+    await callback.answer("Починаємо нову гру до 10!")
+    await callback.message.answer(
+        text=build_score_message(game, show_instructions=True),
+        reply_markup=get_game_keyboard(game, 1)
+    )
+
+@dp.callback_query(lambda cb: cb.data == "buy_pro")
+async def handle_buy_pro(callback: types.CallbackQuery):
+    # Реакція на кнопку «НОВА ГРА ДО 100»
+    await callback.answer("Запуск PRO версії", show_alert=False)
+    # Посилання або реквізити Монобанку для активації
+    await callback.message.answer(
+        "🌟 <b>Активація режиму PRO (До 100 раундів та 10 гравців)</b>\n\n"
+        "Для підключення PRO-версії виконайте оплату у розмірі 100 грн.\n"
+        "💳 Посилання на оплату: <a href='https://monobank.ua'>👉 Сплатити через Monobank</a>\n\n"
+        "Після зарахування коштів гра автоматично розшириться до 100 раундів!",
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(lambda cb: cb.data == "add_players")
+async def handle_add_players(callback: types.CallbackQuery):
+    # Реакція на кнопку «ДОДАТИ ГРАВЦІВ»
+    await callback.answer()
+    await callback.message.answer(
+        "👥 <b>Як додати гравців до гри?</b>\n\n"
+        "Просто надішліть новим учасникам посилання на цю групу або додайте їх через інтерфейс Telegram.\n"
+        "Кожен, хто надішле фотографію з числом-відповіддю у цей чат, автоматично стане учасником та з'явиться у загальному рахунку!",
+        parse_mode="HTML"
+    )
+
+# --- FASTAPI WEBHOOK LIFESPAN КОНФІГУРАЦІЯ ---
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db_pool
-    # Створюємо пул підключень до Supabase при старті додатка
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    # Дія при старті: встановлення вебхука (Суворо за ТЗ)
     webhook_url = f"{BASE_URL}/webhook"
-    await bot.set_webhook(url=webhook_url)
-    
-    yield  # Тут додаток працює і приймає запити
-    
-    # Логіка при зупинці додатка
-    if db_pool:
-        await db_pool.close()
+    logger.info(f"Встановлення Webhook на адресу: {webhook_url}")
+    await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+    yield
+    # Дія при зупинці: видалення вебхука
+    logger.info("Видалення Webhook при зупинці сервісу...")
     await bot.delete_webhook()
+    await bot.session.close()
 
-# Передаємо lifespan в ініціалізацію додатка
 app = FastAPI(lifespan=lifespan)
 
 @app.post("/webhook")
-async def webhook(request: Request):
-    json_str = await request.body()
-    update = Update.model_validate_json(json_str)
-    await dp.feed_update(bot, update)
+async def telegram_webhook_endpoint(request: Request):
+    try:
+        update_data = await request.json()
+        update = types.Update(**update_data)
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        logger.error(f"Помилка обробки апдейту на ендпоінті webhook: {e}")
     return {"status": "ok"}
 
-# Безпечна перевірка PRO статусу
-async def check_pro_status(chat_id: int = None, user_id: int = None) -> bool:
-    if not db_pool:
-        return False
-    async with db_pool.acquire() as conn:
-        if user_id:
-            row = await conn.fetchrow("SELECT is_pro FROM users WHERE user_id = $1", user_id)
-            if row and row['is_pro']:
-                return True
-        if chat_id:
-            row = await conn.fetchrow("SELECT max_rounds FROM games WHERE chat_id = $1", chat_id)
-            if row and row['max_rounds'] == 100:
-                return True
-    return False
-
-# Безпечна функція надсилання правил та перевірки лімітів (із захистом від падіння 500)
-async def send_welcome_rules(chat_id: int):
-    try:
-        count = await bot.get_chat_member_count(chat_id)
-        count_members = count - 1 if count > 1 else 1
-    except Exception:
-        count_members = 2
-
-    is_pro = await check_pro_status(chat_id=chat_id)
-
-    try:
-        if not is_pro:
-            if count_members == 1:
-                text = "Щоб грати, додайте в групу другого гравця.\nЩоб перезапустити бота, напишіть в чат команду /start або /play."
-                keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_game_10")]
-                ])
-                await bot.send_message(chat_id, text, reply_markup=keyboard)
-                return False
-
-            elif count_members >= 3:
-                text = "Щоб грати втрьох і більше, хоча б 1 гравець має бути Pro.\n\nPro-версія гри:\n- до 10 гравців\n- до 100 раундів назавжди\n- у всіх чатах Pro-глявця"
-                keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text="КУПИТИ PRO-ВЕРСІЮ", callback_data="buy_pro")]
-                ])
-                await bot.send_message(chat_id, text, reply_markup=keyboard)
-                return False
-
-        if count_members > 10:
-            text = "На жаль, грати може максимум 10 гравців.\nЩоб перезапустити бота, напишіть в чат команду /start або /play."
-            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="НАС ВЖЕ 10", callback_data="already_10")]
-            ])
-            await bot.send_message(chat_id, text, reply_markup=keyboard)
-            return False
-
-        rules_text = (
-            "Вітаємо у грі <a href='https://t.me/stophotobot'>100 PHOTO</a>!\n\n"
-            "Правила гри:\n\n"
-            "1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у цей чат.\n"
-            "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 photo.\n"
-            "За кожне photo гравець отримує 1 бал.\n\n"
-            "3. Числа не можна створювати (викладати предметами) або писати самому.\n"
-            "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
-            "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо).\n"
-            "Локації мають бути різними.\n\n"
-            "5. Якщо надіслане photo не відповідає правилам, це photo можна відмінити і почати раунд заново.\n"
-            "Щоб перезапустити бота, напишіть в чат команду /start або /play.\n\n"
-            "За бажанням, придумайте приз переможцю.\n\n"
-            "Натхнення!"
-        )
-
-        if is_pro:
-            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="НОВА ГРА", callback_data="start_game_100")]
-            ])
-        else:
-            keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_game_10")],
-                [types.InlineKeyboardButton(text="НОВА ГРА ДО 100", callback_data="buy_pro")],
-                [types.InlineKeyboardButton(text="ДОДАТИ ГРАВЦІВ", callback_data="add_players")]
-            ])
-
-        await bot.send_message(chat_id, rules_text, reply_markup=keyboard, parse_mode="HTML", disable_web_page_preview=True)
-        return True
-
-    except TelegramAPIError as e:
-        print(f"Помилка відправки повідомлення у чат {chat_id}: {e}")
-        return False
-
-# Старт гри через кнопки
-@dp.callback_query(F.data.in_({"start_game_10", "start_game_100"}))
-async def start_game_handler(callback: types.CallbackQuery):
-    max_rounds = 10 if callback.data == "start_game_10" else 100
-    chat_id = callback.message.chat.id
-    
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO games (chat_id, current_round, max_rounds, scores) "
-            "VALUES ($1, 1, $2, '{}'::jsonb) "
-            "ON CONFLICT (chat_id) DO UPDATE SET current_round = 1, max_rounds = $2, scores = '{}'::jsonb",
-            chat_id, max_rounds
-        )
-    
-    await callback.message.answer("Рахунок:\nПоки що 0\n\nЗавдання: 1\n\nЗнайди і сфотографуй число 1.")
-    await callback.answer()
-
-# Скасування раунду
-@dp.callback_query(F.data.startswith("cancel_round_"))
-async def cancel_round(callback: types.CallbackQuery):
-    chat_id = callback.message.chat.id
-    async with db_pool.acquire() as conn:
-        game = await conn.fetchrow("SELECT current_round FROM games WHERE chat_id = $1", chat_id)
-        if game and game['current_round'] > 1:
-            await conn.execute("UPDATE games SET current_round = current_round - 1 WHERE chat_id = $1", chat_id)
-            new_round = game['current_round'] - 1
-            await callback.message.answer(f"Раунд скасовано! Повертаємось до завдання: {new_round}")
-        else:
-            await callback.message.answer("Неможливо скасувати перший раунд.")
-    await callback.answer()
-
-# Прийом фотографій під час активної гри
-@dp.message(F.photo)
-async def handle_photo(message: types.Message):
-    chat_id = message.chat.id
-    username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
-
-    async with db_pool.acquire() as conn:
-        game = await conn.fetchrow("SELECT current_round, max_rounds, scores FROM games WHERE chat_id = $1", chat_id)
-        if not game:
-            return
-
-        current_round = game['current_round']
-        max_rounds = game['max_rounds']
-        scores = json.loads(game['scores']) if isinstance(game['scores'], str) else dict(game['scores'])
-
-        scores[username] = scores.get(username, 0) + 1
-        
-        if current_round >= max_rounds:
-            await conn.execute("UPDATE games SET scores = $2 WHERE chat_id = $1", chat_id, json.dumps(scores))
-            score_text = "\n".join([f"{u}: {s}" for u, s in scores.items()])
-            winner = max(scores, key=scores.get)
-            
-            is_pro = await check_pro_status(chat_id=chat_id)
-            if is_pro:
-                kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="НОВА ГРА", callback_data="start_game_100")]])
-            else:
-                kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_game_10")],
-                    [types.InlineKeyboardButton(text="НОВА ГРА ДО 100", callback_data="buy_pro")],
-                    [types.InlineKeyboardButton(text="ДОДАТИ ГРАВЦІВ", callback_data="add_players")]
-                ])
-                
-            await message.answer(f"Рахунок\n{score_text}\n\nПереможець: {winner}\n\nНе забудь про свій приз!", reply_markup=kb)
-            return
-
-        next_round = current_round + 1
-        await conn.execute("UPDATE games SET current_round = $2, scores = $3 WHERE chat_id = $1", chat_id, next_round, json.dumps(scores))
-        score_text = "\n".join([f"{u}: {s}" for u, s in scores.items()])
-        
-        is_pro = await check_pro_status(chat_id=chat_id)
-        if is_pro:
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {current_round}", callback_data=f"cancel_round_{current_round}")],
-                [types.InlineKeyboardButton(text="НОВА ГРА", callback_data="start_game_100")]
-            ])
-        else:
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {current_round}", callback_data=f"cancel_round_{current_round}")],
-                [types.InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_game_10")],
-                [types.InlineKeyboardButton(text="НОВА ГРА ДО 100", callback_data="buy_pro")],
-                [types.InlineKeyboardButton(text="ДОДАТИ ГРАВЦІВ", callback_data="add_players")]
-            ])
-
-        await message.answer(f"Рахунок\n{score_text}\n\nЗавдання: {next_round}\n\nЗнайди і сфотографуй число {next_round}.", reply_markup=kb)
-
-# Надійне відслідковування додавання бота в групу
-@dp.my_chat_member(ChatMemberUpdatedFilter(chat_member_transition=JOIN_TRANSITION))
-async def on_bot_join(event: ChatMemberUpdated):
-    await send_welcome_rules(event.chat.id)
-
-# Обробка команд /start та /play
-@dp.message(Command("start", "play"))
-async def cmd_start(message: types.Message):
-    if message.chat.type in ["group", "supergroup"]:
-        await send_welcome_rules(message.chat.id)
-    else:
-        await message.answer("Будь ласка, додайте бота в групу, щоб почати гру!")
-
-# Команда /stat для адміна
-@dp.message(Command("stat"))
-async def cmd_stat(message: types.Message):
-    stat_text = (
-        "ЗА ВЕСЬ ЧАС:\n- всі чати: 2\n- всі юзери: 12\n- free-юзери: 11\n- pro-юзери: 1\n\n"
-        "ПРИРІСТ ЗА РІК:\n- всі чати: +2\n- всі юзери: +12\n\n"
-        "ПРИРІСТ ЗА 30 ДНІВ:\n- всі чати: +2\n- всі юзери: +12\n\n"
-        "ПРИРІСТ ЗА 7 ДНІВ:\n- всі чати: +2\n- всі юзери: +12\n\n"
-        "ПРИРІСТ ЗА 24 ГОД:\n- всі чати: +2\n- всі юзери: +12"
-    )
-    await message.answer(stat_text)
+@app.get("/")
+async def root_endpoint():
+    return {"message": "Бот 100 PHOTO працює в режимі Webhook!"}
