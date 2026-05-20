@@ -65,7 +65,7 @@ async def send_welcome_rules(chat_id: int):
         if count_members == 1:
             text = "Щоб грати, додайте в групу другого гравця.\nЩоб перезапустити бота, напишіть в чат команду /start або /play."
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="new_game_10")]
+                [types.InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_game_10")]
             ])
             await bot.send_message(chat_id, text, reply_markup=keyboard)
             return False
@@ -96,7 +96,7 @@ async def send_welcome_rules(chat_id: int):
         "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо).\n"
         "Локації мають бути різними.\n\n"
-        "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n"
+        "5. Якщо надіслане foto не відповідає правилам, це фото можна відмінити і почати раунд заново.\n"
         "Щоб перезапустити бота, напишіть в чат команду /start або /play.\n\n"
         "За бажанням, придумайте приз переможцю.\n\n"
         "Натхнення!"
@@ -151,7 +151,6 @@ async def cancel_round(callback: types.CallbackQuery):
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
     chat_id = message.chat.id
-    user_id = message.from_user.id
     username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
 
     async with db_pool.acquire() as conn:
@@ -164,13 +163,10 @@ async def handle_photo(message: types.Message):
         import json
         scores = json.loads(game['scores']) if isinstance(game['scores'], str) else dict(game['scores'])
 
-        # Нараховуємо бал
         scores[username] = scores.get(username, 0) + 1
         
-        # Перевірка на кінець всієї гри
         if current_round >= max_rounds:
             await conn.execute("UPDATE games SET is_active = false, scores = $2 WHERE chat_id = $1", chat_id, json.dumps(scores))
-            
             score_text = "\n".join([f"{u}: {s}" for u, s in scores.items()])
             winner = max(scores, key=scores.get)
             
@@ -187,10 +183,8 @@ async def handle_photo(message: types.Message):
             await message.answer(f"Рахунок\n{score_text}\n\nПереможець: {winner}\n\nНе забудь про свій приз!", reply_markup=kb)
             return
 
-        # Наступний раунд
         next_round = current_round + 1
         await conn.execute("UPDATE games SET current_round = $2, scores = $3 WHERE chat_id = $1", chat_id, next_round, json.dumps(scores))
-        
         score_text = "\n".join([f"{u}: {s}" for u, s in scores.items()])
         
         is_pro = await check_pro_status(chat_id=chat_id)
