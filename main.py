@@ -13,8 +13,8 @@ import asyncpg
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Зчитування змінних оточення (Суворо за ТЗ)
-TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or "8115804787:AAEdTlx38oNjQH7VEetuSRmal4W2TcmKEgE"
+# Зчитування змінних оточення (Суворо за ТЗ) — БЕЗПЕЧНО, БЕЗ ХАРДКОДУ
+TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 BASE_URL = os.getenv("BASE_URL") or "https://stophotobot-1.onrender.com"
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -110,7 +110,7 @@ async def send_start_game_flow(chat_id: int):
     # Визначаємо імена для першого рендерингу поста
     p1, p2 = await get_chat_players_tags(chat_id)
     
-    # Записуємо або оновлюємо сесію гри в Supabase
+    # Записуємо або оновлюємо сесію гри v Supabase
     async with db_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO games (chat_id, current_round, max_rounds, scores) "
@@ -136,11 +136,11 @@ async def cmd_start(message: types.Message):
     else:
         # Заглушка для приватних повідомлень за ТЗ
         await message.answer(
-            "Щоб грати, додай мене у групу з іншими людьми (не v особисті чати, а саме у групу). "
+            "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу). "
             "Знайдеш мене через пошук @stophotobot"
         )
 
-# Підстраховка: відловлювання події додавання бота через службове повідомлення чату (Працює надійно!)
+# Підстраховка: відловлювання події додавання бота через службове повідомлення чату
 @dp.message(F.new_chat_members)
 async def on_bot_added_as_member(message: types.Message):
     for member in message.new_chat_members:
@@ -258,7 +258,7 @@ async def callback_add_players(callback: types.CallbackQuery):
     await callback.answer()
     await callback.message.answer(
         "👥 <b>Як додати гравців?</b>\n\n"
-        "Просто запросіть друзів у цей чат! Кожен, хто надішле фото з потрібним числом, автоматично потрапить у загальний рахунок гри."
+        "Просто запросіть друзів у цей чат! Кожен, хто надішле photo з потрібним числом, автоматично потрапить у загальний рахунок гри."
     )
 
 # --- ЕНДПОІНТ ДЛЯ ВЕБХУКА ---
