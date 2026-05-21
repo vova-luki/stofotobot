@@ -4,10 +4,10 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import Update
-from aiogram.filters import Command
+from aiogram.types import Update, ChatMemberUpdated
+from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramUnauthorizedError
 import asyncpg
 
 # Налаштування логування для моніторингу в панелі Render
@@ -26,7 +26,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 db_pool = None
 
-# --- ШАБЛОНИ ТЕКСТІВ ТА КНОПОК СУВОРO ЗА ФАЙЛОМ ТЗ (БЕЗ ФОТО) ---
+# --- ШАБЛОНИ ТЕКСТІВ ТА КНОПОК СУВОРO ЗА ФАЙЛОМ ТЗ ---
 
 def get_welcome_text() -> str:
     return (
@@ -34,9 +34,9 @@ def get_welcome_text() -> str:
         "Правила гри:\n\n"
         "1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у цей чат.\n\n"
         "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 фото. "
-        "За кожне фото гравець отримує 1 бал.\n\n"
+        "За кожне photo гравець отримує 1 бал.\n\n"
         "3. Числа не можна створювати (викладати предметами) або писати самому. "
-        "Лише photoграфувати їх вдома, на вулиці тощо.\n\n"
+        "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). "
         "Локації мають бути різними.\n\n"
         "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n\n"
@@ -86,18 +86,29 @@ async def get_chat_players_tags(chat_id: int) -> list:
 async def lifespan(app: FastAPI):
     global db_pool
     logger.info("Підключення до бази даних Supabase PostgreSQL...")
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    try:
+        db_pool = await asyncpg.create_pool(DATABASE_URL)
+    except Exception as e:
+        logger.critical(f"Помилка підключення до БД: {e}")
     
     webhook_url = f"{BASE_URL}/webhook"
     logger.info(f"Встановлення Інтернет-вебхука: {webhook_url}")
-    await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+    try:
+        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+    except TelegramUnauthorizedError:
+        logger.critical("КРИТИЧНА ПОМИЛКА: Токен бота (BOT_TOKEN) невалідний або відхилений Telegram!")
+    except TelegramAPIError as e:
+        logger.error(f"Помилка встановлення вебхука: {e}")
     
     yield
     
     logger.info("Зупинка сервісу: закриття пулу БД та видалення вебхука...")
     if db_pool:
         await db_pool.close()
-    await bot.delete_webhook()
+    try:
+        await bot.delete_webhook()
+    except Exception:
+        pass
     await bot.session.close()
 
 app = FastAPI(lifespan=lifespan)
@@ -122,13 +133,14 @@ async def start_new_game_10_flow(chat_id: int):
     """Ініціалізація гри та виведення ПОСТ 'ЗАВДАННЯ 1' без кнопок"""
     p1, p2 = await get_chat_players_tags(chat_id)
     
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO games (chat_id, current_round, max_rounds, scores) "
-            "VALUES ($1, 1, 10, '{}'::jsonb) "
-            "ON CONFLICT (chat_id) DO UPDATE SET current_round = 1, max_rounds = 10, scores = '{}'::jsonb",
-            chat_id
-        )
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO games (chat_id, current_round, max_rounds, scores) "
+                "VALUES ($1, 1, 10, '{}'::jsonb) "
+                "ON CONFLICT (chat_id) DO UPDATE SET current_round = 1, max_rounds = 10, scores = '{}'::jsonb",
+                chat_id
+            )
     
     task1_text = (
         "Рахунок\n"
@@ -139,6 +151,7 @@ async def start_new_game_10_flow(chat_id: int):
     )
     try:
         await bot.send_message(chat_id=chat_id, text=task1_text)
+        logger.info(f"Завдання 1 надіслано в чат {chat_id}")
     except TelegramAPIError as e:
         logger.error(f"Помилка надсилання Завдання 1 у чат {chat_id}: {e}")
 
@@ -154,19 +167,18 @@ async def cmd_start(message: types.Message):
             "Знайдеш мене через пошук @stophotobot"
         )
 
-@dp.message(F.new_chat_members)
-async def on_bot_added_as_member(message: types.Message):
-    for member in message.new_chat_members:
-        if member.id == message.bot.id:
-            logger.info(f"Бота додано в групу {message.chat.id}")
-            await send_rules_message(message.chat.id)
+# СУВОРO ЗА ТЗ: Миттєве відслідковування додавання бота до групи через сучасний фільтр my_chat_member
+@dp.my_chat_member(ChatMemberUpdatedFilter(member_change=JOIN_TRANSITION))
+async def on_bot_added_to_chat(event: ChatMemberUpdated):
+    logger.info(f"Бота успішно додано в групу {event.chat.id} через подію my_chat_member")
+    await send_rules_message(event.chat.id)
 
 # --- МЕХАНІКА ОБРОБКИ ІГРОВИХ ФОТОГРАФІЙ ---
 
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
     chat_id = message.chat.id
-    if message.chat.type not in ["group", "supergroup"]:
+    if message.chat.type not in ["group", "supergroup"] or not db_pool:
         return
 
     async with db_pool.acquire() as conn:
@@ -197,11 +209,11 @@ async def handle_photo(message: types.Message):
         round_msg = f"Рахунок\n{score_text}\n\nЗавдання: {next_round}"
         await message.answer(round_msg, reply_markup=get_free_game_keyboard(next_round))
 
-# --- ОБРОБКА CALLBACK КНОПОК (ВИПРАВЛЕНО РЕАКЦІЮ) ---
+# --- ОБРОБКА CALLBACK КНОПОК ---
 
 @dp.callback_query(F.data == "start_game_10")
 async def callback_start_game_10(callback: types.CallbackQuery):
-    await callback.answer()  # Підтверджуємо Telegram, що клік оброблено (прибирає годинничок)
+    await callback.answer()
     await start_new_game_10_flow(callback.message.chat.id)
 
 @dp.callback_query(F.data.startswith("cancel_round_"))
@@ -210,6 +222,10 @@ async def cancel_round(callback: types.CallbackQuery):
     try:
         target_round = int(callback.data.split("_")[-1])
     except ValueError:
+        await callback.answer()
+        return
+
+    if not db_pool:
         await callback.answer()
         return
 
@@ -264,10 +280,12 @@ async def callback_add_players(callback: types.CallbackQuery):
 
 @app.post("/webhook")
 async def webhook(request: Request):
-    json_str = await request.body()
-    update = Update.model_validate_json(json_str)
-    # Передаємо боту апдейт з явним очікуванням обробки через диспетчер
-    await dp.feed_update(bot, update)
+    try:
+        json_str = await request.body()
+        update = Update.model_validate_json(json_str)
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        logger.error(f"Помилка обробки вебхука диспетчером: {e}")
     return {"status": "ok"}
 
 @app.get("/")
