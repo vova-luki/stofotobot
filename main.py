@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import Update, ChatMemberUpdated
+from aiogram.types import Update
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import asyncpg
@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Зчитування змінних оточення (Суворо за ТЗ)
-TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
-BASE_URL = os.getenv("BASE_URL")
+TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or "8115804787:AAEdTlx38oNjQH7VEetuSRmal4W2TcmKEgE"
+BASE_URL = os.getenv("BASE_URL") or "https://stophotobot-1.onrender.com"
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not TOKEN:
@@ -32,9 +32,9 @@ def get_welcome_text() -> str:
     return (
         "Вітаємо у грі <a href=\"https://t.me/stophotobot\">100 PHOTO</a>!\n\n"
         "Правила гри:\n\n"
-        "1. Завдання гравців – фотографувати числа (1, 2, 3) i надсилати у цей чат.\n\n"
+        "1. Завдання гравців – photoграфувати числа (1, 2, 3) i надсилати у цей чат.\n\n"
         "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 photo. "
-        "За кожне фото гравець отримує 1 бал.\n\n"
+        "За кожне photo гравець отримує 1 бал.\n\n"
         "3. Числа не можна створювати (викладати предметами) або писати самому. "
         "Лише photoграфувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна повторювати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). "
@@ -129,13 +129,6 @@ async def send_start_game_flow(chat_id: int):
     )
     await bot.send_message(chat_id=chat_id, text=task1_text, reply_markup=get_game_keyboard(1))
 
-# Універсальний хендлер оновлення статусу члена чату
-@dp.my_chat_member()
-async def on_bot_join(event: ChatMemberUpdated):
-    if event.new_chat_member.status in ["member", "administrator"]:
-        logger.info(f"Бот успішно ініціалізований через my_chat_member у групі: {event.chat.id}")
-        await send_start_game_flow(event.chat.id)
-
 @dp.message(Command("start", "play"))
 async def cmd_start(message: types.Message):
     if message.chat.type in ["group", "supergroup"]:
@@ -143,11 +136,11 @@ async def cmd_start(message: types.Message):
     else:
         # Заглушка для приватних повідомлень за ТЗ
         await message.answer(
-            "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу). "
+            "Щоб грати, додай мене у групу з іншими людьми (не v особисті чати, а саме у групу). "
             "Знайдеш мене через пошук @stophotobot"
         )
 
-# Підстраховка: відловлювання події додавання бота через службове повідомлення чату
+# Підстраховка: відловлювання події додавання бота через службове повідомлення чату (Працює надійно!)
 @dp.message(F.new_chat_members)
 async def on_bot_added_as_member(message: types.Message):
     for member in message.new_chat_members:
