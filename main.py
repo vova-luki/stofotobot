@@ -142,7 +142,7 @@ async def evaluate_and_send_post(chat_id: int, trigger_user_id: Optional[int] = 
             "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
             "4. Не можна брати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо).\n"
             "Локації мають бути різними.\n\n"
-            "5. Якщо надіслане foto не відповідає правилам, це фото можна відмінити і почати раунд заново.\n"
+            "5. Якщо надіслане foto не відповідає правилам, це foto можна відмінити і почати раунд заново.\n"
             "Щоб перезапустити бота, напишіть у чат команду /start або /play.\n\n"
             "За бажанням, придумайте приз переможцю.\n\n"
             "Натхнення!"
@@ -153,26 +153,21 @@ async def evaluate_and_send_post(chat_id: int, trigger_user_id: Optional[int] = 
 
 # --- Обробники для Групових чатів ---
 
-# Відстеження події додавання самого БОТА в групу/супергрупу
+# Відстеження події додавання самого БОТА в групу/супергрупу за допомогою магічного фільтра F
 @dp.my_chat_member(
-    ChatMemberUpdatedFilter(
-        old_chat_member_status=[ChatMemberStatus.LEFT, ChatMemberStatus.KICKED],
-        new_chat_member_status=[ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]
-    )
+    F.new_chat_member.status.in_({ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR})
 )
 async def bot_added_to_group(event: ChatMemberUpdated):
     if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         await evaluate_and_send_post(event.chat.id, trigger_user_id=event.from_user.id)
 
-# Моніторинг входу/виходу КОРИСТУВАЧІВ (для коректного апдейту лімітів та статусів)
-@dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
+# Моніторинг входу/виходу КОРИСТУВАЧІВ за допомогою магічних фільтрів F
+@dp.chat_member(F.new_chat_member.status == ChatMemberStatus.MEMBER)
 async def user_joined_group(event: ChatMemberUpdated):
     if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         logger.info(f"Користувач {event.new_chat_member.user.id} зайшов у групу {event.chat.id}")
-        # За потреби тут можна автоматично викликати перевірку лімітів:
-        # await evaluate_and_send_post(event.chat.id)
 
-@dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=LEAVE_TRANSITION))
+@dp.chat_member(F.new_chat_member.status.in_({ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}))
 async def user_left_group(event: ChatMemberUpdated):
     if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         logger.info(f"Користувач {event.old_chat_member.user.id} покинув групу {event.chat.id}")
