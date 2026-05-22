@@ -253,23 +253,17 @@ async def process_incoming_photo(message: types.Message):
     user_identity = message.from_user.full_name if message.from_user.full_name else f"@{message.from_user.username}"
     scores[user_identity] = scores.get(user_identity, 0) + 1
     
-# Формуємо список гравців з іменами з бази + додаємо player N для тих, хто мовчить
+    # --- Формування рахунку (Виправлено) ---
     score_board = ["Рахунок"]
-    # Беремо імена, які вже є в грі
-    played_users = list(scores.keys())
-    
-    # Скільки всього має бути гравців (мінімум 2, якщо `players_count` менше)
-    total_slots = max(2, players_count) 
-    
-    # Додаємо тих, хто грав
     for usr, pts in scores.items():
         score_board.append(f"{usr}: {pts}")
-        
-    # Додаємо вільні слоти, якщо їх менше ніж total_slots
-    for i in range(len(scores), total_slots):
-        score_board.append(f"player {i + 1}: 0")
+    
+    # Додаємо заглушки, якщо гравців менше ніж 2
+    if len(scores) < 2:
+        score_board.append("player 2: 0")
         
     score_text = "\n".join(score_board)
+    # --- Кінець формування ---
 
     if current_round >= max_rounds:
         winner = max(scores, key=scores.get) if scores else "@user"
