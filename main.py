@@ -67,7 +67,7 @@ async def init_db():
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         ''')
-        logger.info("Таблиці в БД перевірено.")
+        logger.info("Таблиці v БД перевірено.")
 
 async def load_game(chat_id: int):
     pool = await get_db_connection()
@@ -189,7 +189,7 @@ async def private_stub(message: types.Message):
     if message.from_user.id == 124303561 and message.text.startswith("/stat"):
         return
     text = (
-        "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу).\n"
+        "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу).\n\n"
         "Знайдеш мене через пошук – @stophotobot"
     )
     await message.answer(text)
@@ -213,7 +213,7 @@ async def show_rules_or_limits(chat_id: int, user_id: int):
 
     if actual_humans < 2:
         text = (
-            "Щоб грати, додайте в групу другого гравця.\n"
+            "Щоб грати, додайте в групу другого гравця.\n\n"
             "Щоб перезапустити бота, напишіть в чат команду /start або /play."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -224,7 +224,7 @@ async def show_rules_or_limits(chat_id: int, user_id: int):
 
     if actual_humans > 10:
         text = (
-            "На жаль, грати може максимум 10 гравців.\n"
+            "На жаль, грати може максимум 10 гравців.\n\n"
             "Щоб перезапустити бота, напишіть в чат команду /start або /play."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -234,14 +234,13 @@ async def show_rules_or_limits(chat_id: int, user_id: int):
         return
 
     text = (
-        "Вітаємо у <a href=\"https://t.me/stophotobot\">100 PHOTO</a>!\n"
+        "Вітаємо у <a href=\"https://t.me/stophotobot\">100 PHOTO</a>!\n\n"
         "Правила гри:\n\n"
-        "1. Завдання гравців – photoграфувати числа (1, 2, 3) і надсилати у цей чат. 1 раунд = 1 photo.\n"
-        "2. За кожне photo гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n"
-        "3. Числа не можна створювати (викладати предметами) або писати самому. Лише photoграфувати їх вдома, на вулиці тощо.\n"
-        "4. Не можна брати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо).\n"
-        "Локації мають бути різними.\n\n"
-        "5. Якщо надіслане photo не відповідає правилам, це photo можна відмінити і почати раунд заново.\n"
+        "1. Завдання гравців – фотогравувати числа (1, 2, 3) і надсилати у цей чат. 1 раунд = 1 фото.\n\n"
+        "2. За кожне фото гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n"
+        "3. Числа не можна створювати (викладати предметами) або писати самому. Лише фотогравувати їх вдома, на вулиці тощо.\n\n"
+        "4. Не можна брати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). Локації мають бути різними.\n\n"
+        "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n\n"
         "Щоб перезапустити бота, напишіть у чат команду /start або /play.\n\n"
         "За бажанням, придумайте приз переможцю.\n\n"
         "Натхнення!"
@@ -274,7 +273,8 @@ async def start_free_game(callback: types.CallbackQuery):
         "player 2: 0\n\n"
         "Завдання: сфотографуй число 1."
     )
-    await callback.message.edit_text(text=text, reply_markup=None)
+    # ЗМІНЕНО: Надсилаємо НОВИМ повідомленням, не руйнуючи початковий пост правил
+    await callback.bot.send_message(chat_id=chat_id, text=text, reply_markup=None)
     await callback.answer()
 
 @dp.callback_query(F.data == "start_pro_game_active")
@@ -293,15 +293,16 @@ async def start_pro_game_active(callback: types.CallbackQuery):
         "player N: 0\n\n"
         "Завдання: cфотографуй число 1."
     )
-    await callback.message.edit_text(text=text, reply_markup=None)
+    # ЗМІНЕНО: Надсилаємо НОВИМ повідомленням
+    await callback.bot.send_message(chat_id=chat_id, text=text, reply_markup=None)
     await callback.answer()
 
 @dp.callback_query(F.data == "start_pro_buy")
 async def show_pro_payment(callback: types.CallbackQuery):
     user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
     
     if await is_user_pro(user_id):
-        chat_id = callback.message.chat.id
         players = {}
         current_word_data = {"number": 1}
         await save_game(chat_id, "playing_pro", 1, players, current_word_data)
@@ -314,7 +315,7 @@ async def show_pro_payment(callback: types.CallbackQuery):
             "player N: 0\n\n"
             "Завдання: cфотографуй число 1."
         )
-        await callback.message.edit_text(text=text, reply_markup=None)
+        await callback.bot.send_message(chat_id=chat_id, text=text, reply_markup=None)
         await callback.answer()
         return
 
@@ -329,7 +330,8 @@ async def show_pro_payment(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="КУПИТИ PRO-ВЕРСІЮ", url=mono_link)],
         [InlineKeyboardButton(text="ПРОДОВЖИТИ ГРУ УДВОХ", callback_data="start_free_10")]
     ])
-    await callback.message.reply(text=text, reply_markup=kb)
+    # ЗМІНЕНО: Відправляємо окремим повідомленням, а не міняємо правила
+    await callback.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("clear_round_"))
@@ -399,7 +401,7 @@ async def handle_game_photo(message: types.Message):
         if user_id not in players and len(players) >= 2:
             if not await is_user_pro(message.from_user.id):
                 text = (
-                    "Щоб грати втрьох і більше, хоча б 1 гравець має бути Pro.\n"
+                    "Щоб грати втрьох і більше, хоча б 1 гравець має бути Pro.\n\n"
                     "Pro-версія гри:\n"
                     "- до 10 гравців\n"
                     "- до 100 раундів назавжди\n"
@@ -525,7 +527,7 @@ async def mono_webhook(request: Request):
                     u_name = f"@{user_row.username}" if user_row.username else user_row.first_name
                     
                     text = (
-                        "Дякую, оплата є!\n"
+                        "Дякую, оплата є!\n\n"
                         f"– {u_name} тепер Pro\n"
                         "– відкрито 100 раундів\n"
                         "– відкрито 10 гравців"
@@ -553,7 +555,7 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    logger.info("Закриття додатка, очищення資源...")
+    logger.info("Закриття додатка, очищення ресурсів...")
     await dp.storage.close()
     
     if bot.session:
