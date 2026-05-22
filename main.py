@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
@@ -29,7 +30,10 @@ WEBHOOK_PATH = f"/webhook"
 WEBHOOK_URL = f"{BASE_URL}{WEBHOOK_PATH}"
 
 # Ініціалізація бота та диспетчера
-bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+bot = Bot(
+    token=BOT_TOKEN, 
+    default=DefaultBotProperties(parse_mode="HTML")
+)
 dp = Dispatcher()
 
 # Глобальний пул підключень до БД
