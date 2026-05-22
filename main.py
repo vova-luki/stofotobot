@@ -38,13 +38,13 @@ db_pool: Optional[asyncpg.Pool] = None
 async def init_db_pool():
     global db_pool
     if db_pool is None:
-        db_pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=10, port=6543)
-
-async def register_chat(chat_id: int):
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO chats (chat_id, is_pro, created_at) VALUES ($1, FALSE, NOW()) ON CONFLICT (chat_id) DO NOTHING",
-            chat_id
+        # Прибираємо port=6543, asyncpg візьме його з рядка DATABASE_URL
+        # Додаємо statement_cache_size=0 для сумісності з PgBouncer
+        db_pool = await asyncpg.create_pool(
+            dsn=DATABASE_URL, 
+            min_size=1, 
+            max_size=10,
+            statement_cache_size=0 
         )
 
 async def check_chat_pro_status(chat_id: int) -> bool:
