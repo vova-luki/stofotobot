@@ -280,7 +280,7 @@ async def private_chat_handler(message: types.Message):
 
 # --- МОНІТОР ДОДАВАННЯ БОТА В ГРУПИ ---
 
-@dp.my_chat_member(ChatMemberUpdatedFilter(old_chat_member=JOIN_TRANSITION.old, new_chat_member=JOIN_TRANSITION.new))
+@dp.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def bot_added_to_group(event: types.ChatMemberUpdated):
     chat_id = event.chat.id
     try:
