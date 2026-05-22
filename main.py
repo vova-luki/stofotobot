@@ -26,7 +26,7 @@ if not BOT_TOKEN or not BASE_URL or not DATABASE_URL:
     raise ValueError("Критична помилка: Перевірте наявність BOT_TOKEN, BASE_URL та DATABASE_URL у панелі Render.")
 
 ADMIN_ID = 124303561
-# URL-адреса для QR-оплати Monobank (легко змінюється за потреби)
+# URL-адреса для QR-оплати Monobank
 MONOBANK_PAY_URL = "https://send.monobank.ua/jar/example" 
 
 bot = Bot(token=BOT_TOKEN)
@@ -51,8 +51,6 @@ async def check_chat_pro_status(chat_id: int) -> bool:
         val = await conn.fetchval("SELECT is_pro FROM chats WHERE chat_id = $1", chat_id)
         if val:
             return True
-        # Перевірка: якщо хоча б один користувач у групі має статус PRO
-        # Для забезпечення правила "хоча б 1 Pro гравець у групі"
         return False
 
 async def get_game_state(chat_id: int) -> Optional[dict]:
@@ -85,7 +83,7 @@ async def evaluate_and_send_post(chat_id: int, trigger_user_id: Optional[int] = 
         players_count = await get_clean_member_count(chat_id)
         is_pro = await check_chat_pro_status(chat_id)
 
-        # Якщо ліміт перевищено, гра блокується (незалежно від стану раунду)
+        # Якщо ліміт перевищено, гра блокується
         if not is_pro and players_count >= 3:
             builder = InlineKeyboardBuilder()
             builder.button(text="КУПИТИ PRO-ВЕРСІЮ", url=MONOBANK_PAY_URL)
@@ -97,37 +95,37 @@ async def evaluate_and_send_post(chat_id: int, trigger_user_id: Optional[int] = 
                 "- до 100 раундів назавжди\n"
                 "- у всіх чатах Pro-гравця",
                 reply_markup=builder.as_markup()
-            ) [cite: 5]
+            )
             return
 
         if is_pro and players_count >= 11:
             builder = InlineKeyboardBuilder()
-            builder.button(text="НАС ВЖЕ 10", callback_data="refresh_status") [cite: 7]
+            builder.button(text="НАС ВЖЕ 10", callback_data="refresh_status")
             await bot.send_message(
                 chat_id,
                 "На жаль, грати може максимум 10 гравців.\n\n"
                 "Щоб перезапустити бота, напишіть в чат команду /start або /play.",
                 reply_markup=builder.as_markup()
-            ) [cite: 6]
+            )
             return
 
         if players_count == 1:
             builder = InlineKeyboardBuilder()
-            builder.button(text="НОВА ГРА ДО 10" if not is_pro else "НОВА ГРА", callback_data="new_game_10" if not is_pro else "new_game_100") [cite: 4]
+            builder.button(text="НОВА ГРА ДО 10" if not is_pro else "НОВА ГРА", callback_data="new_game_10" if not is_pro else "new_game_100")
             await bot.send_message(
                 chat_id,
                 "Щоб грати, додайте в групу другого гравця.\n\n"
                 "Щоб перезапустити бота, напишіть в чат команду /start або /play.",
                 reply_markup=builder.as_markup()
-            ) [cite: 3]
+            )
             return
 
         # Валідний запуск — надсилаємо правила
         builder = InlineKeyboardBuilder()
         if not is_pro:
-            builder.button(text="НОВА ГРА ДО 10", callback_data="new_game_10") [cite: 14]
-            builder.button(text="НОВА ГРА ДО 100 (PRO)", callback_data="trigger_payment") [cite: 14]
-            builder.button(text="ДОДАТИ ГРАВЦІВ (PRO)", callback_data="trigger_payment") [cite: 14]
+            builder.button(text="НОВА ГРА ДО 10", callback_data="new_game_10")
+            builder.button(text="НОВА ГРА ДО 100 (PRO)", callback_data="trigger_payment")
+            builder.button(text="ДОДАТИ ГРАВЦІВ (PRO)", callback_data="trigger_payment")
             builder.adjust(1)
         else:
             builder.button(text="НОВА ГРА", callback_data="new_game_100")
@@ -135,15 +133,15 @@ async def evaluate_and_send_post(chat_id: int, trigger_user_id: Optional[int] = 
         rules_text = (
             "Вітаємо у грі <a href=\"https://t.me/stophotobot\">100 PHOTO</a>!\n"
             "Правила гри:\n\n"
-            "1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у цей чат.\n" [cite: 8]
-            "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 фото.\n" [cite: 9]
-            "За кожне фото гравець отримує 1 бал.\n\n" [cite: 10]
+            "1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у цей чат.\n"
+            "2. Безоплатна гра триває 10 раундів, платна – 100 раундів. 1 раунд = 1 photo.\n"
+            "За кожне фото гравець отримує 1 бал.\n\n"
             "3. Числа не можна створювати (викладати предметами) або писати самому.\n"
-            "Лише фотографувати їх вдома, на вулиці тощо.\n\n" [cite: 11]
+            "Лише фотографувати їх вдома, на вулиці тощо.\n\n"
             "4. Не можна брати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо).\n"
-            "Локації мають бути різними.\n\n" [cite: 12]
-            "5. Якщо надіслане foto не відповідає правилам, це фото можна відмінити і почати раунд заново.\n"
-            "Щоб перезапустити бота, напишіть у чат команду /start або /play.\n\n" [cite: 13]
+            "Локації мають бути різними.\n\n"
+            "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n"
+            "Щоб перезапустити бота, напишіть у чат команду /start або /play.\n\n"
             "За бажанням, придумайте приз переможцю.\n\n"
             "Натхнення!"
         )
@@ -227,7 +225,6 @@ async def process_incoming_photo(message: types.Message):
     current_round = game["current_round"]
     scores = game["scores"]
     
-    # Визначення імені профілю або юзернейму
     user_identity = message.from_user.full_name if message.from_user.full_name else f"@{message.from_user.username}"
     scores[user_identity] = scores.get(user_identity, 0) + 1
     
@@ -241,16 +238,16 @@ async def process_incoming_photo(message: types.Message):
         end_text = f"{score_text}\n\nПереможець: {winner}\n\nНе забудь про свій приз!"
         
         builder = InlineKeyboardBuilder()
-        builder.button(text=f"ОБНУЛИТИ РАУНД {current_round}", callback_data=f"undo_{current_round}") [cite: 15, 17]
+        builder.button(text=f"ОБНУЛИТИ РАУНД {current_round}", callback_data=f"undo_{current_round}")
         if is_pro:
-            builder.button(text="НОВА ГРА", callback_data="new_game_100") [cite: 17]
+            builder.button(text="НОВА ГРА", callback_data="new_game_100")
         else:
-            builder.button(text="НОВА ГРА ДО 10", callback_data="new_game_10") [cite: 15]
-            builder.button(text="НОВА ГРА ДО 100 (PRO)", callback_data="trigger_payment") [cite: 15]
-            builder.button(text="ДОДАТИ ГРАВЦІВ (PRO)", callback_data="trigger_payment") [cite: 15]
+            builder.button(text="НОВА ГРА ДО 10", callback_data="new_game_10")
+            builder.button(text="НОВА ГРА ДО 100 (PRO)", callback_data="trigger_payment")
+            builder.button(text="ДОДАТИ ГРАВЦІВ (PRO)", callback_data="trigger_payment")
         builder.adjust(1)
         
-        await save_game_state(chat_id, 0, scores)  # Закриваємо сесію
+        await save_game_state(chat_id, 0, scores)
         await message.answer(end_text, reply_markup=builder.as_markup())
     else:
         next_round = current_round + 1
@@ -368,10 +365,10 @@ async def private_stub_response(message: types.Message):
         
     await message.answer(
         "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу).\n\n"
-        "Знайдеш мене через пошук – @stophotobot" [cite: 2]
+        "Знайдеш мене через пошук – @stophotobot"
     )
 
-# --- FastAPI Webhook Lifespan (Суворе правило для Render) ---
+# --- FastAPI Webhook Lifespan ---
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -404,7 +401,7 @@ async def inbound_tg_updates(request: Request):
 async def monobank_payment_receiver(request: Request):
     try:
         data = await request.json()
-        if data.get("amount", 0) >= 10000:  # Від 100 грн (переводиться в копійки)
+        if data.get("amount", 0) >= 10000:
             custom = data.get("custom_data", {})
             tg_user_id = int(custom.get("user_id", 0))
             
@@ -414,13 +411,13 @@ async def monobank_payment_receiver(request: Request):
                 
                 try:
                     builder = InlineKeyboardBuilder()
-                    builder.button(text="НОВА ГРА", callback_data="new_game_100") [cite: 16]
+                    builder.button(text="НОВА ГРА", callback_data="new_game_100")
                     await bot.send_message(
                         tg_user_id,
                         "Дякую, оплата є!\n"
                         "– @user тепер Pro\n"
                         "– відкрито 100 раундів\n"
-                        "– відкрито 10 гравців", [cite: 16]
+                        "– відкрито 10 гравців",
                         reply_markup=builder.as_markup()
                     )
                 except TelegramAPIError as tg_err:
