@@ -169,13 +169,14 @@ async def user_joined_group(event: ChatMemberUpdated):
         logger.info(f"Користувач {event.new_chat_member.user.id} зайшов у групу {event.chat.id}")
 
 # Моніторинг виходу КОРИСТУВАЧІВ за допомогою LEAVE_TRANSITION
-@dp.chat_member(ChatMemberUpdatedFilter.member_status_changed(LEAVE_TRANSITION))
+# Моніторинг виходу КОРИСТУВАЧІВ
+@dp.chat_member(F.new_chat_member.status.in_({"left", "kicked"}))
 async def user_left_group(event: ChatMemberUpdated):
     if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         logger.info(f"Користувач {event.old_chat_member.user.id} покинув групу {event.chat.id}")
 
 # Обробка текстових команд у групах
-@dp.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), Command("start", "play"))
+@dp.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), Command(commands=["start", "play"]))
 async def group_reset_command(message: types.Message):
     await evaluate_and_send_post(message.chat.id, trigger_user_id=message.from_user.id)
 
