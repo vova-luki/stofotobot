@@ -421,6 +421,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# --- НОВИЙ МАРШРУТ ДЛЯ ПЕРЕВІРКИ З БОКУ RENDER ---
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Bot is running"}
+
 @app.post("/webhook")
 async def inbound_tg_updates(request: Request):
     try:
