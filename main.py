@@ -167,7 +167,6 @@ async def user_joined_group(event: ChatMemberUpdated):
     if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         logger.info(f"Користувач {event.new_chat_member.user.id} зайшов у групу {event.chat.id}")
 
-# Моніторинг виходу КОРИСТУВАЧІВ за допомогою LEAVE_TRANSITION
 # Моніторинг виходу КОРИСТУВАЧІВ
 @dp.chat_member(F.new_chat_member.status.in_({"left", "kicked"}))
 async def user_left_group(event: ChatMemberUpdated):
@@ -394,7 +393,11 @@ async def lifespan(app: FastAPI):
     await init_db_pool()
     web_url = f"{BASE_URL}/webhook"
     try:
-        await bot.set_webhook(url=web_url, drop_pending_updates=True)
+        await bot.set_webhook(
+            url=web_url, 
+            drop_pending_updates=True, 
+            allowed_updates=["message", "chat_member", "my_chat_member", "callback_query"]
+        )
         logger.info(f"Вебхук підключено до: {web_url}")
     except Exception as e:
         logger.error(f"Помилка встановлення вебхуку під час запуску: {e}")
