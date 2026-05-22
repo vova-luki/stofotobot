@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, Response, status
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ChatType, ChatMemberStatus
 from aiogram.filters import Command, ChatMemberUpdatedFilter
+from aiogram.filters.chat_member_updated import JOIN_TRANSITION, LEAVE_TRANSITION
 from aiogram.types import ChatMemberUpdated
 from aiogram.exceptions import TelegramAPIError
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -152,7 +153,7 @@ async def evaluate_and_send_post(chat_id: int, trigger_user_id: Optional[int] = 
 
 # --- Обробники для Групових чатів ---
 
-# Оновлена фільтрація для додавання бота у групу в aiogram 3.x
+# Відстеження події додавання самого БОТА в групу/супергрупу
 @dp.my_chat_member(
     ChatMemberUpdatedFilter(
         old_chat_member_status=[ChatMemberStatus.LEFT, ChatMemberStatus.KICKED],
@@ -163,6 +164,20 @@ async def bot_added_to_group(event: ChatMemberUpdated):
     if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         await evaluate_and_send_post(event.chat.id, trigger_user_id=event.from_user.id)
 
+# Моніторинг входу/виходу КОРИСТУВАЧІВ (для коректного апдейту лімітів та статусів)
+@dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
+async def user_joined_group(event: ChatMemberUpdated):
+    if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        logger.info(f"Користувач {event.new_chat_member.user.id} зайшов у групу {event.chat.id}")
+        # За потреби тут можна автоматично викликати перевірку лімітів:
+        # await evaluate_and_send_post(event.chat.id)
+
+@dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=LEAVE_TRANSITION))
+async def user_left_group(event: ChatMemberUpdated):
+    if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        logger.info(f"Користувач {event.old_chat_member.user.id} покинув групу {event.chat.id}")
+
+# Обробка текстових команд у групах
 @dp.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), Command("start", "play"))
 async def group_reset_command(message: types.Message):
     await evaluate_and_send_post(message.chat.id, trigger_user_id=message.from_user.id)
