@@ -49,13 +49,13 @@ async def get_chat_pro_status(chat_id: int) -> bool:
     """Перевіряє, чи є в чаті PRO-користувачі або чи активований PRO для чату."""
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        game = await conn.fetchrow("SELECT status FROM games WHERE chat_id = $1", chat_id)
+        game = await conn.fetchrow("SELECT status, players FROM games WHERE chat_id = $1", chat_id)
         if game and game['status'] == 'PRO':
             return True
         
-        if game:
+        if game and game['players']:
             import json
-            players = json.loads(game.get('players', '{}'))
+            players = json.loads(game['players'])
             if players:
                 user_ids = [int(uid) for uid in players.keys() if uid.isdigit()]
                 if user_ids:
@@ -88,7 +88,7 @@ async def init_or_get_game(chat_id: int) -> dict:
     import json
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT status, current_round, players, last_photo_by FROM games WHERE chat_id = $1", chat_id)
+        row = await conn.fetchrow("SELECT status, current_round, players, last_photo_by WHERE chat_id = $1", chat_id)
         if not row:
             default_players = {}
             await conn.execute(
@@ -139,9 +139,7 @@ async def update_player_name_background(chat_id: int, user: types.User):
         return
     
     real_name = user.first_name
-    if not real_name and user.username:
-        real_name = f"@{user.username}"
-    elif user.username:
+    if user.username:
         real_name = f"@{user.username}"
         
     await update_user_in_db(user)
@@ -164,7 +162,10 @@ def format_scoreboard(players: dict, max_slots: int = 2) -> str:
     lines = []
     active_players = list(players.items())
     
-    for i in range(max_slots):
+    # Показуємо або реальних гравців, або заповнюємо пусті слоти за замовчуванням
+    slots_to_show = max(max_slots, len(active_players))
+    
+    for i in range(slots_to_show):
         if i < len(active_players):
             uid, pdata = active_players[i]
             lines.append(f"{pdata['name']}: {pdata['score']}")
@@ -179,12 +180,12 @@ async def send_welcome_rules(chat_id: int):
     text = (
         'Вітаємо у <a href="https://t.me/stophotobot">100 PHOTO</a>!\n'
         'Правила гри:\n\n'
-        '1. Завдання гравців – photoграфувати числа (1, 2, 3) і надсилати у цей чат. 1 раунд = 1 photo.\n\n'
-        '2. За кожне photo гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n'
-        '3. Числа не можна створювати (викладати предметами) або писати самому. Лише photoграфувати їх вдома, на вулиці тощо.\n\n'
+        '1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у цей чат. 1 раунд = 1 фото.\n\n'
+        '2. За кожне фото гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n'
+        '3. Числа не можна створювати (викладати предметами) або писати самому. Лише фотографувати їх вдома, на вулиці тощо.\n\n'
         '4. Не можна брати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо).\n'
         'Локації мають бути різними.\n\n'
-        '5. Якщо надіслане photo не відповідає правилам, це photo можна відмінити і почати раунд заново.\n'
+        '5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n'
         'Щоб перезапустити бота, напишіть у чат команду /start або /play.\n\n'
         'За бажанням, придумайте приз переможцю.\n\n'
         'Натхнення!'
@@ -386,7 +387,7 @@ async def process_start_new_game_pro(callback: types.CallbackQuery):
         f"Раунд 1.\n\n"
         f"Рахунок\n"
         f"{score_text}\n\n"
-        f"Завдання: cфотографуй число 1."
+        f"Завдання: сфотографуй число 1."
     )
     try:
         await callback.message.answer(text)
@@ -425,7 +426,8 @@ async def process_undo_round(callback: types.CallbackQuery):
             
     await save_game(chat_id, game["status"], target_round, players, None)
     
-    slots = max(2, len(players)) if game["status"] == "PRO" else 2
+    is_pro = (game["status"] == "PRO")
+    slots = max(2, len(players)) if is_pro else 2
     score_text = format_scoreboard(players, max_slots=slots)
     
     if target_round == 1:
@@ -443,8 +445,8 @@ async def process_undo_round(callback: types.CallbackQuery):
             f"{score_text}\n\n"
             f"Завдання: число {target_round}"
         )
-        kb_text = "НОВА ГРА" if game["status"] == "PRO" else "НОВА ГРА ДО 10"
-        kb_data = "start_new_game" if game["status"] == "PRO" else "start_free_10"
+        kb_text = "НОВА ГРА" if is_pro else "НОВА ГРА ДО 10"
+        kb_data = "start_new_game" if is_pro else "start_free_10"
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {target_round-1}", callback_data=f"undo_round_{target_round-1}")],
             [InlineKeyboardButton(text=kb_text, callback_data=kb_data)]
@@ -471,12 +473,14 @@ async def process_game_photo(message: types.Message):
     if current_round == 0:
         return
         
-    max_rounds = 100 if status == "PRO" else 10
+    is_pro = (status == "PRO")
+    max_rounds = 100 if is_pro else 10
     
     count = await message.chat.get_member_count()
     actual_chat_members = count - 1
     
-    if status == "FREE" and actual_chat_members >= 3:
+    # Сувора перевірка лімітів кількості учасників у чаті
+    if not is_pro and actual_chat_members >= 3:
         await message.answer(
             "Щоб грати втрьох і більше, хоча б 1 гравець має бути Pro.\n"
             "Pro-версія гри:\n"
@@ -488,7 +492,7 @@ async def process_game_photo(message: types.Message):
             ])
         )
         return
-    elif status == "PRO" and actual_chat_members >= 11:
+    elif is_pro and actual_chat_members >= 11:
         await message.answer(
             "На жаль, грати може максимум 10 гравців.\n"
             "Щоб перезапустити бота, напишіть в чат команду /start або /play.",
@@ -508,7 +512,7 @@ async def process_game_photo(message: types.Message):
         winner_id = max(players, key=lambda k: players[k]["score"])
         winner_name = players[winner_id]["name"]
         
-        slots = max(2, len(players)) if status == "PRO" else 2
+        slots = max(2, len(players)) if is_pro else 2
         score_text = format_scoreboard(players, max_slots=slots)
         
         text = (
@@ -518,7 +522,7 @@ async def process_game_photo(message: types.Message):
             f"Не забудь про свій приз!"
         )
         
-        if status == "PRO":
+        if is_pro:
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {max_rounds}", callback_data=f"undo_round_{max_rounds}")],
                 [InlineKeyboardButton(text="НОВА ГРА", callback_data="start_new_game")]
@@ -537,7 +541,7 @@ async def process_game_photo(message: types.Message):
         next_round = current_round + 1
         await save_game(chat_id, status, next_round, players, user_id)
         
-        slots = max(2, len(players)) if status == "PRO" else 2
+        slots = max(2, len(players)) if is_pro else 2
         score_text = format_scoreboard(players, max_slots=slots)
         
         text = (
@@ -547,8 +551,8 @@ async def process_game_photo(message: types.Message):
             f"Завдання: число {next_round}"
         )
         
-        kb_text = "НОВА ГРА" if status == "PRO" else "НОВА ГРА ДО 10"
-        kb_data = "start_new_game" if status == "PRO" else "start_free_10"
+        kb_text = "НОВА ГРА" if is_pro else "НОВА ГРА ДО 10"
+        kb_data = "start_new_game" if is_pro else "start_free_10"
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {current_round}", callback_data=f"undo_round_{current_round}")],
