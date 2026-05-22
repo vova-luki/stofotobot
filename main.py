@@ -179,11 +179,11 @@ async def send_welcome_rules(chat_id: int):
         'Вітаємо у <a href="https://t.me/stophotobot">100 PHOTO</a>!\n'
         'Правила гри:\n\n'
         '1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у цей чат. 1 раунд = 1 photo.\n\n'
-        '2. За кожне фото гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n'
+        '2. За кожне photo гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n'
         '3. Числа не можна створювати (викладати предметами) або писати самому. Лише фотографувати їх вдома, на вулиці тощо.\n\n'
         '4. Не можна брати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо).\n'
         'Локації мають бути різними.\n\n'
-        '5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n'
+        '5. Якщо надіслане photo не відповідає правилам, це photo можна відмінити і почати раунд заново.\n'
         'Щоб перезапустити бота, напишіть у чат команду /start або /play.\n\n'
         'За бажанням, придумайте приз переможцю.\n\n'
         'Натхнення!'
@@ -561,7 +561,19 @@ async def process_game_photo(message: types.Message):
 
 # --- WEBHOOK FASTAPI СЕРВЕР ТА ЛІФСПАН МЕНЕДЖЕР ---
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Старт сервісу: реєстрація вебхука та ініціалізація бази даних
+    await get_db_pool()
+    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
+    yield
+    # Зупинка сервісу: видалення вебхука та закриття пулу підключень
+    await bot.delete_webhook()
+    if db_pool:
+        await db_pool.close()
+
+# Передаємо lifespan безпосередньо в ініціалізацію FastAPI додатка
+app = FastAPI(lifespan=lifespan)
 
 @app.post(WEBHOOK_PATH)
 async def bot_webhook(request: Request):
@@ -613,19 +625,6 @@ async def monobank_webhook(request: Request):
 async def root_health_check():
     return {"status": "healthy", "bot": "100 PHOTO"}
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Старт сервісу: реєстрація вебхука та ініціалізація бази даних
-    await get_db_pool()
-    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
-    yield
-    # Зупинка сервісу: видалення вебхука та закриття пулу підключень
-    await bot.delete_webhook()
-    if db_pool:
-        await db_pool.close()
-
-# Прив'язуємо lifespan менеджер до нашого додатка
-app.router.lifespan_context = lifespan
 
 # Блок для локального запуску скрипта
 if __name__ == "__main__":
