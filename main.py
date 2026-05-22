@@ -153,19 +153,17 @@ async def evaluate_and_send_post(chat_id: int, trigger_user_id: Optional[int] = 
 
 # --- Обробники для Групових чатів ---
 
-# Відстеження події додавання самого БОТА в групу/супергрупу за допомогою офіційного ChatMemberUpdatedFilter
+# Відстеження події додавання самого БОТА в групу/супергрупу
 @dp.my_chat_member(
-    ChatMemberUpdatedFilter.member_status_changed(
-        old_status=IS_NOT_MEMBER,
-        new_status=IS_MEMBER | IS_ADMIN
-    )
+    F.old_chat_member.status.in_({"left", "kicked"}) & 
+    F.new_chat_member.status.in_({"member", "administrator"})
 )
 async def bot_added_to_group(event: ChatMemberUpdated):
     if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         await evaluate_and_send_post(event.chat.id, trigger_user_id=event.from_user.id)
 
-# Моніторинг входу КОРИСТУВАЧІВ за допомогою JOIN_TRANSITION
-@dp.chat_member(ChatMemberUpdatedFilter.member_status_changed(JOIN_TRANSITION))
+# Моніторинг входу КОРИСТУВАЧІВ
+@dp.chat_member(F.new_chat_member.status == "member")
 async def user_joined_group(event: ChatMemberUpdated):
     if event.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         logger.info(f"Користувач {event.new_chat_member.user.id} зайшов у групу {event.chat.id}")
