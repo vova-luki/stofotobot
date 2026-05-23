@@ -94,7 +94,7 @@ async def save_game(chat_id: int, status: str, round_number: int, players: dict,
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (chat_id) 
             DO UPDATE SET status = $2, round_number = $3, players = $4, current_word_data = $5
-        ''', chat_id, status, round_number, players_json, current_word_json)
+        ''', chat_id, status, round_number, players_json, current_json)
 
 async def is_user_pro(user_id: int) -> bool:
     pool = await get_db_connection()
@@ -112,14 +112,11 @@ async def set_user_pro_status(user_id: int, status: bool):
         ''', user_id, status)
 
 async def check_group_has_pro(chat_id: int) -> bool:
-    """Перевіряє, чи є хоча б один PRO-користувач серед учасників чату."""
     pool = await get_db_connection()
     async with pool.acquire() as conn:
-        # Витягуємо всіх PRO користувачів з бази даних
         pro_rows = await conn.fetch("SELECT user_id FROM pro_users WHERE is_pro = true")
         pro_user_ids = [row["user_id"] for row in pro_rows]
         
-        # Додаємо твій ID про всяк випадок, якщо його ще немає в таблиці pro_users, але ти увімкнув /pro
         if await is_user_pro(ADMIN_ID) and ADMIN_ID not in pro_user_ids:
             pro_user_ids.append(ADMIN_ID)
             
@@ -144,8 +141,8 @@ async def get_chat_players_count(chat_id: int) -> int:
 # ЛОГІКА ХЕНДЛЕРІВ
 # ==========================================
 
-# КЕРУВАННЯ СТАТУСОМ АДМІНІСТРАТОРА (ТЕСТУВАННЯ)
-@dp.message(Command("free", "pro"))
+# КЕРУВАННЯ СТАТУСОМ АДМІНІСТРАТОРА (ЛИШЕ В ОСОБИСТИХ ПОВІДОМЛЕННЯХ)
+@dp.message(F.chat.type == "private" & Command("free", "pro"))
 async def toggle_admin_status(message: types.Message):
     if message.from_user.id == ADMIN_ID:
         command = message.text.split()[0].replace("/", "").lower()
@@ -265,11 +262,12 @@ async def show_rules_or_limits(chat_id: int):
         await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
         return
 
+    # ПОМИЛКА 1 ВИПРАВЛЕНА: "1 раунд = 1 фото" замість англійського photo
     text = (
         "Вітаємо у <a href=\"https://t.me/stophotobot\">100 PHOTO</a>!\n\n"
         "Правила гри:\n\n"
         "1. Завдання гравців – фотогравувати числа (1, 2, 3) і надсилати у цей чат. 1 раунд = 1 фото.\n\n"
-        "2. За кожне photo гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n"
+        "2. За кожне фото гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n"
         "3. Числа не можна створювати (викладати предметами) або писати самому. Лише фотогравувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна брати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). Локації мають бути різними.\n\n"
         "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n\n"
@@ -278,16 +276,16 @@ async def show_rules_or_limits(chat_id: int):
         "Натхнення!"
     )
 
-    # ОНОВЛЕНО: Бот тепер шукає PRO-гравців серед усіх учасників цієї групи
     if await check_group_has_pro(chat_id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="НОВА ГРА", callback_data="start_pro_game_active")]
         ])
     else:
+        # ПОМИЛКА 2 ВИПРАВЛЕНА: Третя кнопка тепер теж викликає вікно оплати "start_pro_buy" замість лінку url
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_free_10")],
             [InlineKeyboardButton(text="НОВА ГРА ДО 100 (PRO)", callback_data="start_pro_buy")],
-            [InlineKeyboardButton(text="ДОДАТИ ГРАВЦІВ (PRO)", url="https://t.me/stophotobot?startgroup=true")]
+            [InlineKeyboardButton(text="ДОДАТИ ГРАВЦІВ (PRO)", callback_data="start_pro_buy")]
         ])
         
     await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb, disable_web_page_preview=True)
@@ -386,7 +384,11 @@ async def clear_round_handler(callback: types.CallbackQuery):
     current_word_data = {"number": target_round}
     await save_game(chat_id, game["status"], target_round, players, current_word_data)
     
-    scoreboard = "\n".join([f"{p['name']}: {p['score']}" for p in players.values()]) if players else "@user1: ...\n@user2: ..."
+    # ПОМИЛКА 3 ВИПРАВЛЕНА ТУТ ТАКОЖ (генерація списку рахунку для скидання)
+    lines = [f"{p['name']}: {p['score']}" for p in players.values()]
+    if len(lines) == 1:
+        lines.append("player 2: 0")
+    scoreboard = "\n".join(lines) if lines else "player 1: 0\nplayer 2: 0"
     
     if game["status"] == "playing_free":
         text = (
@@ -429,7 +431,6 @@ async def handle_game_photo(message: types.Message):
 
     if game["status"] == "playing_free":
         if user_id not in players and len(players) >= 2:
-            # ОНОВЛЕНО: Перевіряємо, чи є в чаті PRO-гравці взагалі, перш ніж не пускати третього
             if not await check_group_has_pro(chat_id):
                 text = (
                     "Щоб грати втрьох і більше, хоча б 1 гравець має бути Pro.\n\n"
@@ -452,7 +453,10 @@ async def handle_game_photo(message: types.Message):
     max_rounds = 10 if game["status"] == "playing_free" else 100
     
     if round_num >= max_rounds:
-        scoreboard = "\n".join([f"{p['name']}: {p['score']}" for p in players.values()])
+        lines = [f"{p['name']}: {p['score']}" for p in players.values()]
+        if len(lines) == 1:
+            lines.append("player 2: 0")
+        scoreboard = "\n".join(lines)
         
         if game["status"] == "playing_free":
             text = (
@@ -465,7 +469,7 @@ async def handle_game_photo(message: types.Message):
                 [InlineKeyboardButton(text="ОБНУЛИТИ РАУНД 10", callback_data="clear_round_10")],
                 [InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_free_10")],
                 [InlineKeyboardButton(text="НОВА ГРА ДО 100 (PRO)", callback_data="start_pro_buy")],
-                [InlineKeyboardButton(text="ДОДАТИ ГРАВЦІВ (PRO)", url="https://t.me/stophotobot?startgroup=true")]
+                [InlineKeyboardButton(text="ДОДАТИ ГРАВЦІВ (PRO)", callback_data="start_pro_buy")]
             ])
         else:
             text = (
@@ -487,7 +491,11 @@ async def handle_game_photo(message: types.Message):
     current_word_data = {"number": next_round}
     await save_game(chat_id, game["status"], next_round, players, current_word_data)
 
-    scoreboard = "\n".join([f"{p['name']}: {p['score']}" for p in players.values()])
+    # ПОМИЛКА 3 ВИПРАВЛЕНА: Якщо надіслано перше фото, додаємо заглушку "player 2: 0"
+    lines = [f"{p['name']}: {p['score']}" for p in players.values()]
+    if len(lines) == 1:
+        lines.append("player 2: 0")
+    scoreboard = "\n".join(lines)
     
     if game["status"] == "playing_free":
         text = (
