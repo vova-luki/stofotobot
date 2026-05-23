@@ -15,7 +15,7 @@ import asyncpg
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Зчитування змінних оточення
+# Зчитування змінних оточення (Токен береться з Render безпечно)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BASE_URL = os.getenv("BASE_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -94,7 +94,7 @@ async def save_game(chat_id: int, status: str, round_number: int, players: dict,
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (chat_id) 
             DO UPDATE SET status = $2, round_number = $3, players = $4, current_word_data = $5
-        ''', chat_id, status, round_number, players_json, current_json)
+        ''', chat_id, status, round_number, players_json, current_word_json)  # ВИПРАВЛЕНО: current_word_json замість помилкового current_json
 
 async def is_user_pro(user_id: int) -> bool:
     pool = await get_db_connection()
@@ -217,9 +217,10 @@ async def admin_stat(message: types.Message):
 async def private_stub(message: types.Message):
     if message.from_user.id == ADMIN_ID and (message.text.startswith("/stat") or message.text.startswith("/free") or message.text.startswith("/pro")):
         return
+    # Оновлено лінк на новий юзернейм @stofotobot
     text = (
         "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу).\n\n"
-        "Знайдеш мене через пошук – @stophotobot"
+        "Знайдеш мене через пошук – @stofotobot"
     )
     await message.answer(text)
 
@@ -262,15 +263,15 @@ async def show_rules_or_limits(chat_id: int):
         await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
         return
 
-    # ПОМИЛКА 1 ВИПРАВЛЕНА: "1 раунд = 1 фото" замість англійського photo
+    # Оновлено назву на 100 ФОТО та посилання на новий лінк бота
     text = (
-        "Вітаємо у <a href=\"https://t.me/stophotobot\">100 PHOTO</a>!\n\n"
+        "Вітаємо у <a href=\"https://t.me/stofotobot\">100 ФОТО</a>!\n\n"
         "Правила гри:\n\n"
-        "1. Завдання гравців – фотогравувати числа (1, 2, 3) і надсилати у цей чат. 1 раунд = 1 фото.\n\n"
+        "1. Завдання гравців – фотогравувати числа (1, 2, 3) і надсилати у цей чат. 1 раунд = 1 photo.\n\n"
         "2. За кожне фото гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n"
         "3. Числа не можна створювати (викладати предметами) або писати самому. Лише фотогравувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна брати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). Локації мають бути різними.\n\n"
-        "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n\n"
+        "5. Якщо надіслане foto не відповідає правилам, це фото можна відмінити і почати раунд заново.\n\n"
         "Щоб перезапустити бота, напишіть у чат команду /start або /play.\n\n"
         "За бажанням, придумайте приз переможцю.\n\n"
         "Натхнення!"
@@ -281,7 +282,6 @@ async def show_rules_or_limits(chat_id: int):
             [InlineKeyboardButton(text="НОВА ГРА", callback_data="start_pro_game_active")]
         ])
     else:
-        # ПОМИЛКА 2 ВИПРАВЛЕНА: Третя кнопка тепер теж викликає вікно оплати "start_pro_buy" замість лінку url
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_free_10")],
             [InlineKeyboardButton(text="НОВА ГРА ДО 100 (PRO)", callback_data="start_pro_buy")],
@@ -384,7 +384,6 @@ async def clear_round_handler(callback: types.CallbackQuery):
     current_word_data = {"number": target_round}
     await save_game(chat_id, game["status"], target_round, players, current_word_data)
     
-    # ПОМИЛКА 3 ВИПРАВЛЕНА ТУТ ТАКОЖ (генерація списку рахунку для скидання)
     lines = [f"{p['name']}: {p['score']}" for p in players.values()]
     if len(lines) == 1:
         lines.append("player 2: 0")
@@ -491,7 +490,6 @@ async def handle_game_photo(message: types.Message):
     current_word_data = {"number": next_round}
     await save_game(chat_id, game["status"], next_round, players, current_word_data)
 
-    # ПОМИЛКА 3 ВИПРАВЛЕНА: Якщо надіслано перше фото, додаємо заглушку "player 2: 0"
     lines = [f"{p['name']}: {p['score']}" for p in players.values()]
     if len(lines) == 1:
         lines.append("player 2: 0")
