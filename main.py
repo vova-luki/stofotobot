@@ -41,7 +41,7 @@ async def get_db_connection():
     if DB_POOL is None:
         try:
             DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
-            logger.info("Пул підключень до БД успешно створено.")
+            logger.info("Пул підключень до БД успішно створено.")
         except Exception as e:
             logger.error(f"Помилка створення пулу підключень до БД: {e}")
             raise e
@@ -242,7 +242,16 @@ async def bot_added_to_group(event: types.ChatMemberUpdated):
 async def manual_start_in_group(message: types.Message):
     if message.chat.type in ["group", "supergroup"]:
         chat_id = message.chat.id
-        await save_game(chat_id, "registration", 0, {})
+        
+        # ОБЕРЕЖНЕ ВИПРАВЛЕННЯ: Замість затирання в {}, перевіряємо, чи є вже гравці у базі
+        existing_game = await load_game(chat_id)
+        players = existing_game["players"] if existing_game and "players" in existing_game else {}
+        
+        # Обнуляємо бали існуючим гравцям, щоб при натисканні кнопки вони не перенеслися у нову гру
+        for p_id in players:
+            players[p_id]["score"] = 0
+            
+        await save_game(chat_id, "registration", 0, players)
         await show_rules_or_limits(chat_id)
 
 async def show_rules_or_limits(chat_id: int):
@@ -275,9 +284,9 @@ async def show_rules_or_limits(chat_id: int):
         "Правила гри:\n\n"
         "1. Завдання гравців – фотати числа (1, 2, 3) і надсилати у цей чат. Хто перший – отримує 1 бал.\n\n"
         "2. Кожен раунд = 1 photo = 1 бал. Безоплатна гра триває 10 раундів, платна – 100.\n\n"
-        "3. Числа не можна викладати предметами чи писати самому. Можна лише фотати їх вдома, на вулиці тощо.\n\n"
-        "4. Не беріть двічі числа з однієї локації (сторінки книги, кнопки ліфту тощо). Локації мають бути різними.\n\n"
-        "5. Якщо надіслане фото не відповідає завданню, його можна відмінити і почати раунд заново.\n\n"
+        "3. Числа не можна створювати (викладати предметами) або писати самому. Лише фотати їх вдома, на вулиці тощо.\n\n"
+        "4. Не беріть двічі числа з однієї локації (номери у книзі, кнопки ліфту тощо). Локації мають бути різними.\n\n"
+        "5. Якщо надіслане foto не відповідає завданню, його можна відмінити і почати раунд заново.\n\n"
         "Щоб перезапустити бота, напишіть /start або /play.\n\n"
         "Придумайте приз і гоу!"
     )
@@ -300,7 +309,6 @@ async def start_free_game(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     game = await load_game(chat_id)
     
-    # Витягуємо збережених гравців (якщо вони вже є в базі) та обнуляємо їм бали
     players = game["players"] if game and "players" in game else {}
     for p_id in players:
         players[p_id]["score"] = 0
@@ -327,7 +335,6 @@ async def start_pro_game_active(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     game = await load_game(chat_id)
     
-    # Зберігаємо відомих боту гравців і скидаємо бали
     players = game["players"] if game and "players" in game else {}
     for p_id in players:
         players[p_id]["score"] = 0
