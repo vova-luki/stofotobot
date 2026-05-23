@@ -30,6 +30,7 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
 DB_POOL = None
+ADMIN_ID = 124303561  # Твій ID розробника
 
 # ==========================================
 # РОБОТА З БАЗОЮ ДАНИХ (asyncpg)
@@ -67,7 +68,7 @@ async def init_db():
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         ''')
-        logger.info("Таблиці v БД перевірено.")
+        logger.info("Таблиці в БД перевірено.")
 
 async def load_game(chat_id: int):
     pool = await get_db_connection()
@@ -96,8 +97,6 @@ async def save_game(chat_id: int, status: str, round_number: int, players: dict,
         ''', chat_id, status, round_number, players_json, current_word_json)
 
 async def is_user_pro(user_id: int) -> bool:
-    if user_id in [124303561]:  # Твій ID розробника
-        return True
     pool = await get_db_connection()
     async with pool.acquire() as conn:
         val = await conn.fetchval("SELECT is_pro FROM pro_users WHERE user_id = $1", user_id)
@@ -112,6 +111,27 @@ async def set_user_pro_status(user_id: int, status: bool):
             ON CONFLICT (user_id) DO UPDATE SET is_pro = $2, updated_at = CURRENT_TIMESTAMP
         ''', user_id, status)
 
+async def check_group_has_pro(chat_id: int) -> bool:
+    """Перевіряє, чи є хоча б один PRO-користувач серед учасників чату."""
+    pool = await get_db_connection()
+    async with pool.acquire() as conn:
+        # Витягуємо всіх PRO користувачів з бази даних
+        pro_rows = await conn.fetch("SELECT user_id FROM pro_users WHERE is_pro = true")
+        pro_user_ids = [row["user_id"] for row in pro_rows]
+        
+        # Додаємо твій ID про всяк випадок, якщо його ще немає в таблиці pro_users, але ти увімкнув /pro
+        if await is_user_pro(ADMIN_ID) and ADMIN_ID not in pro_user_ids:
+            pro_user_ids.append(ADMIN_ID)
+            
+        for u_id in pro_user_ids:
+            try:
+                member = await bot.get_chat_member(chat_id=chat_id, user_id=u_id)
+                if member.status in ["creator", "administrator", "member"]:
+                    return True
+            except Exception:
+                continue
+    return False
+
 async def get_chat_players_count(chat_id: int) -> int:
     try:
         count = await bot.get_chat_member_count(chat_id)
@@ -124,17 +144,29 @@ async def get_chat_players_count(chat_id: int) -> int:
 # ЛОГІКА ХЕНДЛЕРІВ
 # ==========================================
 
+# КЕРУВАННЯ СТАТУСОМ АДМІНІСТРАТОРА (ТЕСТУВАННЯ)
+@dp.message(Command("free", "pro"))
+async def toggle_admin_status(message: types.Message):
+    if message.from_user.id == ADMIN_ID:
+        command = message.text.split()[0].replace("/", "").lower()
+        if command == "pro":
+            await set_user_pro_status(ADMIN_ID, True)
+            await message.reply("⚙️ <b>Адмін-панель:</b> Твій статус змінено на <b>PRO</b> у всіх чатах.")
+        else:
+            await set_user_pro_status(ADMIN_ID, False)
+            await message.reply("⚙️ <b>Адмін-панель:</b> Твій статус змінено на <b>FREE</b> у всіх чатах.")
+
 @dp.message(Command("stat"))
 async def admin_stat(message: types.Message):
-    if message.chat.type == "private" and message.from_user.id == 124303561:
+    if message.chat.type == "private" and message.from_user.id == ADMIN_ID:
         pool = await get_db_connection()
         now = datetime.now()
         
         async with pool.acquire() as conn:
             all_chats = await conn.fetchval("SELECT COUNT(*) FROM games")
             all_users = await conn.fetchval("SELECT COUNT(*) FROM pro_users")
-            pro_users = await conn.fetchval("SELECT COUNT(*) FROM pro_users WHERE is_pro = true")
-            free_users = all_users - pro_users
+            pro_users_count = await conn.fetchval("SELECT COUNT(*) FROM pro_users WHERE is_pro = true")
+            free_users = all_users - pro_users_count
 
             async def get_stats_delta(delta_days=None, delta_hours=None):
                 if delta_days:
@@ -160,7 +192,7 @@ async def admin_stat(message: types.Message):
             f"- всі чати: {all_chats}\n"
             f"- всі юзери: {all_users}\n"
             f"- free-юзери: {free_users}\n"
-            f"- pro-юзери: {pro_users}\n\n"
+            f"- pro-юзери: {pro_users_count}\n\n"
             f"ПРИРІСТ ЗА РІК:\n"
             f"- всі чати: +{c_1y}\n"
             f"- всі юзери: +{u_1y}\n"
@@ -186,7 +218,7 @@ async def admin_stat(message: types.Message):
 
 @dp.message(F.chat.type == "private")
 async def private_stub(message: types.Message):
-    if message.from_user.id == 124303561 and message.text.startswith("/stat"):
+    if message.from_user.id == ADMIN_ID and (message.text.startswith("/stat") or message.text.startswith("/free") or message.text.startswith("/pro")):
         return
     text = (
         "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу).\n\n"
@@ -198,16 +230,16 @@ async def private_stub(message: types.Message):
 async def bot_added_to_group(event: types.ChatMemberUpdated):
     chat_id = event.chat.id
     await save_game(chat_id, "registration", 0, {})
-    await show_rules_or_limits(chat_id, event.from_user.id)
+    await show_rules_or_limits(chat_id)
 
 @dp.message(Command("start", "play"))
 async def manual_start_in_group(message: types.Message):
     if message.chat.type in ["group", "supergroup"]:
         chat_id = message.chat.id
         await save_game(chat_id, "registration", 0, {})
-        await show_rules_or_limits(chat_id, message.from_user.id)
+        await show_rules_or_limits(chat_id)
 
-async def show_rules_or_limits(chat_id: int, user_id: int):
+async def show_rules_or_limits(chat_id: int):
     count = await get_chat_players_count(chat_id)
     actual_humans = count - 1 if count > 0 else 1
 
@@ -237,7 +269,7 @@ async def show_rules_or_limits(chat_id: int, user_id: int):
         "Вітаємо у <a href=\"https://t.me/stophotobot\">100 PHOTO</a>!\n\n"
         "Правила гри:\n\n"
         "1. Завдання гравців – фотогравувати числа (1, 2, 3) і надсилати у цей чат. 1 раунд = 1 фото.\n\n"
-        "2. За кожне фото гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n"
+        "2. За кожне photo гравець отримує 1 бал. Безоплатна гра триває 10 раундів, платна – 100 раундів.\n\n"
         "3. Числа не можна створювати (викладати предметами) або писати самому. Лише фотогравувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна брати двічі числа з однієї локації (номери сторінок у книзі, кнопки в ліфті тощо). Локації мають бути різними.\n\n"
         "5. Якщо надіслане фото не відповідає правилам, це фото можна відмінити і почати раунд заново.\n\n"
@@ -246,7 +278,8 @@ async def show_rules_or_limits(chat_id: int, user_id: int):
         "Натхнення!"
     )
 
-    if await is_user_pro(user_id):
+    # ОНОВЛЕНО: Бот тепер шукає PRO-гравців серед усіх учасників цієї групи
+    if await check_group_has_pro(chat_id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="НОВА ГРА", callback_data="start_pro_game_active")]
         ])
@@ -273,7 +306,6 @@ async def start_free_game(callback: types.CallbackQuery):
         "player 2: 0\n\n"
         "Завдання: сфотографуй число 1."
     )
-    # ЗМІНЕНО: Надсилаємо НОВИМ повідомленням, не руйнуючи початковий пост правил
     await callback.bot.send_message(chat_id=chat_id, text=text, reply_markup=None)
     await callback.answer()
 
@@ -293,7 +325,6 @@ async def start_pro_game_active(callback: types.CallbackQuery):
         "player N: 0\n\n"
         "Завдання: cфотографуй число 1."
     )
-    # ЗМІНЕНО: Надсилаємо НОВИМ повідомленням
     await callback.bot.send_message(chat_id=chat_id, text=text, reply_markup=None)
     await callback.answer()
 
@@ -330,7 +361,6 @@ async def show_pro_payment(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="КУПИТИ PRO-ВЕРСІЮ", url=mono_link)],
         [InlineKeyboardButton(text="ПРОДОВЖИТИ ГРУ УДВОХ", callback_data="start_free_10")]
     ])
-    # ЗМІНЕНО: Відправляємо окремим повідомленням, а не міняємо правила
     await callback.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
     await callback.answer()
 
@@ -399,7 +429,8 @@ async def handle_game_photo(message: types.Message):
 
     if game["status"] == "playing_free":
         if user_id not in players and len(players) >= 2:
-            if not await is_user_pro(message.from_user.id):
+            # ОНОВЛЕНО: Перевіряємо, чи є в чаті PRO-гравці взагалі, перш ніж не пускати третього
+            if not await check_group_has_pro(chat_id):
                 text = (
                     "Щоб грати втрьох і більше, хоча б 1 гравець має бути Pro.\n\n"
                     "Pro-версія гри:\n"
