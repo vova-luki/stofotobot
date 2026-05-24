@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
-from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION, IS_MEMBER, LEFT_MEMBER
+from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import asyncpg
 
@@ -91,7 +91,7 @@ async def init_db():
             UPDATE pro_users SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL;
         ''')
         
-        logger.info("Таблиці в БД перевірено та успішно оновлено.")
+        logger.info("Таблиці v БД перевірено та успішно оновлено.")
 
 async def load_game(chat_id: int):
     pool = await get_db_connection()
@@ -347,18 +347,21 @@ async def bot_added_to_group(event: types.ChatMemberUpdated):
     except Exception as e:
         logger.error(f"Помилка відображення правил при додаванні: {e}")
 
-# Хендлер, який реагує на зміну складу групи (коли користувачі додають нових людей)
-@dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=IS_MEMBER))
+# Виправлено: правильний хендлер для відстеження додавання звичайних учасників до групи
+@dp.chat_member()
 async def user_added_to_group(event: types.ChatMemberUpdated):
     chat_id = event.chat.id
-    game = await load_game(chat_id)
     
-    # Реагуємо на додавання нових людей лише на етапі реєстрації/перевірки лімітів
-    if not game or game["status"] == "registration":
-        try:
-            await show_rules_or_limits(chat_id)
-        except Exception as e:
-            logger.error(f"Помилка перевірки лімітів при додаванні юзера: {e}")
+    # Перевіряємо, чи це подія додавання нового користувача (статус змінився на member)
+    if event.new_chat_member.status == "member" and event.old_chat_member.status in ["left", "kicked", "restricted"]:
+        game = await load_game(chat_id)
+        
+        # Реагуємо лише на етапі реєстрації/перевірки лімітів
+        if not game or game["status"] == "registration":
+            try:
+                await show_rules_or_limits(chat_id)
+            except Exception as e:
+                logger.error(f"Помилка перевірки лімітів при додаванні юзера: {e}")
 
 @dp.message(Command("start", "play"))
 async def manual_start_in_group(message: types.Message):
@@ -389,7 +392,7 @@ async def show_rules_or_limits(chat_id: int):
     if has_pro:
         if actual_humans == 1:
             text = (
-                "Щоб грати, додайте в групу другого гравця.\n\n"
+                "Щоб грати, додайте v групу другого гравця.\n\n"
                 "Щоб перезапустити бота, напишіть в чат команду /start або /play."
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -410,7 +413,7 @@ async def show_rules_or_limits(chat_id: int):
     else:
         if actual_humans == 1:
             text = (
-                "Щоб грати, додайте в групу другого гравця.\n\n"
+                "Щоб грати, додайте v групу другого гравця.\n\n"
                 "Щоб перезапустити бота, напишіть в чат команду /start або /play."
             )
             kb = InlineKeyboardMarkup(inline_keyboard=[
