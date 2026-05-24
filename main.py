@@ -138,7 +138,6 @@ async def get_chat_players_count(chat_id: int) -> int:
         logger.error(f"Помилка отримання кількості учасників: {e}")
         return 0
 
-# Фільтрація гравців із фіксацією змін у складі групи
 async def filter_active_players(chat_id: int, players: dict, current_word_data: dict) -> (dict, dict):
     active_players = {}
     was_changed = False
@@ -159,7 +158,6 @@ async def filter_active_players(chat_id: int, players: dict, current_word_data: 
         
     return active_players, current_word_data
 
-# Функція залізобетонної перевірки на одну людину в чаті для кнопок
 async def check_and_handle_alone(chat_id: int, callback: types.CallbackQuery = None) -> bool:
     count = await get_chat_players_count(chat_id)
     actual_humans = count - 1 if count > 0 else 1
@@ -172,11 +170,14 @@ async def check_and_handle_alone(chat_id: int, callback: types.CallbackQuery = N
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_free_10")]
         ])
-        if callback:
-            await callback.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
-            await callback.answer()
-        else:
-            await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+        try:
+            if callback:
+                await callback.bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+                await callback.answer()
+            else:
+                await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+        except Exception as e:
+            logger.error(f"Помилка відправки повідомлення про соло-гру: {e}")
         return True
     return False
 
@@ -189,7 +190,6 @@ def generate_initial_scoreboard(players: dict) -> str:
         lines.append("player 2: 0")
     return "\n".join(lines)
 
-# Helper функція для розрахунку статистики без урахування соло-тестів адміна
 async def get_db_stats(conn, dt=None):
     time_filter = "AND created_at >= $1" if dt else ""
     params = [dt] if dt else []
@@ -248,52 +248,50 @@ async def admin_stat(message: types.Message):
         pool = await get_db_connection()
         now = datetime.now()
         
+        # Послідовне виконання запитів без паралельного блокування з'єднання
         async with pool.acquire() as conn:
-            tasks = [
-                get_db_stats(conn),                      
-                get_db_stats(conn, now - timedelta(days=365)), 
-                get_db_stats(conn, now - timedelta(days=30)),  
-                get_db_stats(conn, now - timedelta(days=7)),   
-                get_db_stats(conn, now - timedelta(hours=24))  
-            ]
-            res = await asyncio.gather(*tasks)
+            res0 = await get_db_stats(conn)                      
+            res1 = await get_db_stats(conn, now - timedelta(days=365)) 
+            res2 = await get_db_stats(conn, now - timedelta(days=30))  
+            res3 = await get_db_stats(conn, now - timedelta(days=7))   
+            res4 = await get_db_stats(conn, now - timedelta(hours=24))  
 
         stat_text = (
             f"ЗА ВЕСЬ ЧАС:\n"
-            f"- всі чати: {res[0][0]}\n"
-            f"- всі ігри до 10: {res[0][1]}\n"
-            f"- всі ігри до 100: {res[0][2]}\n"
-            f"- всі юзери: {res[0][3]}\n"
-            f"- free-юзери: {res[0][4]}\n"
-            f"- pro-юзери: {res[0][5]}\n\n"
+            f"- всі чати: {res0[0]}\n"
+            f"- всі ігри до 10: {res0[1]}\n"
+            f"- всі ігри до 100: {res0[2]}\n"
+            f"- всі юзери: {res0[3]}\n"
+            f"- free-юзери: {res0[4]}\n"
+            f"- pro-юзери: {res0[5]}\n\n"
             f"ПРИРІСТ ЗА РІК:\n"
-            f"- всі чати: +{res[1][0]}\n"
-            f"- всі ігри до 10: +{res[1][1]}\n"
-            f"- всі ігри до 100: +{res[1][2]}\n"
-            f"- всі юзери: +{res[1][3]}\n"
-            f"- free-юзери: +{res[1][4]}\n"
-            f"- pro-юзери: +{res[1][5]}\n\n"
+            f"- всі чати: +{res1[0]}\n"
+            f"- всі ігри до 10: +{res1[1]}\n"
+            f"- всі ігри до 100: +{res1[2]}\n"
+            f"- всі юзери: +{res1[3]}\n"
+            f"- free-юзери: +{res1[4]}\n"
+            f"- pro-юзери: +{res1[5]}\n\n"
             f"ПРИРІСТ ЗА 30 ДНІВ:\n"
-            f"- всі чати: +{res[2][0]}\n"
-            f"- всі ігри до 10: +{res[2][1]}\n"
-            f"- всі ігри до 100: +{res[2][2]}\n"
-            f"- всі юзери: +{res[2][3]}\n"
-            f"- free-юзери: +{res[2][4]}\n"
-            f"- pro-юзери: +{res[2][5]}\n\n"
+            f"- всі чати: +{res2[0]}\n"
+            f"- всі ігри до 10: +{res2[1]}\n"
+            f"- всі ігри до 100: +{res2[2]}\n"
+            f"- всі юзери: +{res2[3]}\n"
+            f"- free-юзери: +{res2[4]}\n"
+            f"- pro-юзери: +{res2[5]}\n\n"
             f"ПРИРІСТ ЗА 7 ДНІВ:\n"
-            f"- всі чати: +{res[3][0]}\n"
-            f"- всі ігри до 10: +{res[3][1]}\n"
-            f"- всі ігри до 100: +{res[3][2]}\n"
-            f"- всі юзери: +{res[3][3]}\n"
-            f"- free-юзери: +{res[3][4]}\n"
-            f"- pro-юзери: +{res[3][5]}\n\n"
+            f"- всі чати: +{res3[0]}\n"
+            f"- всі ігри до 10: +{res3[1]}\n"
+            f"- всі ігри до 100: +{res3[2]}\n"
+            f"- всі юзери: +{res3[3]}\n"
+            f"- free-юзери: +{res3[4]}\n"
+            f"- pro-юзери: +{res3[5]}\n\n"
             f"ПРИРІСТ ЗА 24 ГОД:\n"
-            f"- всі чати: +{res[4][0]}\n"
-            f"- всі ігри до 10: +{res[4][1]}\n"
-            f"- всі ігри до 100: +{res[4][2]}\n"
-            f"- всі юзери: +{res[4][3]}\n"
-            f"- free-юзери: +{res[4][4]}\n"
-            f"- pro-юзери: +{res[4][5]}"
+            f"- всі чати: +{res4[0]}\n"
+            f"- всі ігри до 10: +{res4[1]}\n"
+            f"- всі ігри до 100: +{res4[2]}\n"
+            f"- всі юзери: +{res4[3]}\n"
+            f"- free-юзери: +{res4[4]}\n"
+            f"- pro-юзери: +{res4[5]}"
         )
         await message.answer(stat_text)
 
@@ -312,7 +310,10 @@ async def private_stub(message: types.Message):
 async def bot_added_to_group(event: types.ChatMemberUpdated):
     chat_id = event.chat.id
     await save_game(chat_id, "registration", 0, {})
-    await show_rules_or_limits(chat_id)
+    try:
+        await show_rules_or_limits(chat_id)
+    except Exception as e:
+        logger.error(f"Помилка відображення правил при додаванні: {e}")
 
 @dp.message(Command("start", "play"))
 async def manual_start_in_group(message: types.Message):
@@ -329,7 +330,10 @@ async def manual_start_in_group(message: types.Message):
             players[p_id]["score"] = 0
             
         await save_game(chat_id, "registration", 0, players, current_word_data)
-        await show_rules_or_limits(chat_id)
+        try:
+            await show_rules_or_limits(chat_id)
+        except Exception as e:
+            logger.error(f"Помилка у manual_start_in_group: {e}")
 
 async def show_rules_or_limits(chat_id: int):
     count = await get_chat_players_count(chat_id)
@@ -357,14 +361,13 @@ async def show_rules_or_limits(chat_id: int):
         await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
         return
 
-    # ОНОВЛЕНИЙ ПОСТ "ПРАВИЛА" (Слово "бути" виправлено)
     text = (
         "Правила гри:\n\n"
-        "1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у чат. Хто перший – отримує 1 бал.\n\n"
+        "1. Завдання гравців – photoграфувати числа (1, 2, 3) і надсилати у чат. Хто перший – отримує 1 бал.\n\n"
         "2. Кожен раунд = 1 photo / 1 бал. Безоплатна гра триває 10 раундів, платна – 100.\n\n"
-        "3. Не можна викладати числа предметами чи писати самому. Можна лише фотографувати їх вдома, на вулиці тощо.\n\n"
+        "3. Не можна викладати числа предметами чи писати самому. Можна лише photoграфувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна брати двічі числа з однієї локації (сторінки книги, кнопки ліфту тощо). Локації мають бути різними.\n\n"
-        "5. Якщо надіслане foto не відповідає завданню, його можна відмінити і почати раунд заново.\n\n"
+        "5. Якщо надіслане photo не відповідає завданню, його можна відмінити і почати раунд заново.\n\n"
         "Щоб перезапустити бота, напишіть /start або /play.\n\n"
         "Придумайте приз і гоу!"
     )
@@ -615,10 +618,8 @@ async def handle_game_photo(message: types.Message):
     user_id = str(message.from_user.id)
     u_name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
 
-    # КОНТРОЛЬ ЛІМІТІВ НАДХОДЖЕННЯ ФОТО ВІД НОВИХ КРИСТУВАЧІВ ПРЯМО ПІД ЧАС ГРИ
     if user_id not in players:
         if game["status"] == "playing_free":
-            # Якщо в безкоштовній грі вже є 2 людини — третій зась! Виводимо допис "3 людини в групі"
             if len(players) >= 2:
                 if not await check_group_has_pro(chat_id):
                     text = (
@@ -634,7 +635,6 @@ async def handle_game_photo(message: types.Message):
                     await message.reply(text, reply_markup=kb)
                     return
         elif game["status"] == "playing_pro":
-            # Якщо в Pro грі вже назбиралося 10 людей — 11-й гравець блокується
             if len(players) >= 10:
                 text = (
                     "На жаль, грати може максимум 10 гравців.\n\n"
@@ -646,7 +646,6 @@ async def handle_game_photo(message: types.Message):
                 await message.reply(text, reply_markup=kb)
                 return
 
-        # Якщо ліміти пройдені — додаємо нового гравця і фіксуємо зміну складу
         current_word_data["composition_changed"] = True
         players[user_id] = {"name": u_name, "score": 0}
         
@@ -741,8 +740,14 @@ async def bot_webhook(request: Request):
     except Exception:
         return Response(status_code=400)
     
-    update = types.Update(**data)
-    await dp.feed_update(bot, update)
+    # Огортаємо запуск апдейту в try/except, щоб помилки через видалені чати 
+    # ніколи не повертали статус 500 і не блокували чергу повідомлень бота
+    try:
+        update = types.Update(**data)
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        logger.error(f"Помилка при обробці апдейту: {e}")
+        
     return Response(status_code=200)
 
 @app.post("/mono_webhook")
