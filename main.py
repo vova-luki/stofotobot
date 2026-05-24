@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
@@ -183,90 +184,129 @@ def generate_initial_scoreboard(players: dict) -> str:
     if not players:
         return "player 1: 0\nplayer 2: 0"
     
-    lines = [f"{p['name']}: 0" for p in players.values()]
+    lines = [f"{p['name']}: {p.get('score', 0)}" for p in players.values()]
     if len(lines) == 1:
         lines.append("player 2: 0")
     return "\n".join(lines)
+
+# Helper функція для розрахунку статистики без урахування соло-тестів адміна
+async def get_db_stats(conn, dt=None):
+    time_filter = "AND created_at >= $1" if dt else ""
+    params = [dt] if dt else []
+
+    # Фільтр виключення ігор, де грав лише адмін одноосібно
+    not_only_admin_filter = f"""
+        (players = '{{}}'::jsonb OR NOT (
+            players ? '{ADMIN_ID}' AND (SELECT count(*) FROM jsonb_object_keys(players)) = 1
+        ))
+    """
+
+    sql_chats = f"SELECT COUNT(*) FROM games WHERE {not_only_admin_filter} {time_filter}"
+    sql_games_10 = f"SELECT COUNT(*) FROM games WHERE (status='playing_free' OR (status='finished' AND round_number=10) OR (status='registration' AND round_number=0)) AND {not_only_admin_filter} {time_filter}"
+    sql_games_100 = f"SELECT COUNT(*) FROM games WHERE (status='playing_pro' OR (status='finished' AND round_number=100)) AND {not_only_admin_filter} {time_filter}"
+
+    # Юзери (виключаємо адміна, якщо він був єдиним у грі)
+    sql_users = f"""
+        SELECT COUNT(DISTINCT user_id) FROM (
+            SELECT jsonb_object_keys(players)::bigint AS user_id FROM games 
+            WHERE {not_only_admin_filter} {time_filter}
+        ) AS all_users
+    """
+    sql_pro = f"""
+        SELECT COUNT(DISTINCT user_id) FROM (
+            SELECT jsonb_object_keys(players)::bigint AS user_id FROM games 
+            WHERE {not_only_admin_filter} {time_filter}
+        ) AS active_users
+        JOIN pro_users ON pro_users.user_id = active_users.user_id WHERE pro_users.is_pro = true
+    """
+
+    chats = await conn.fetchval(sql_chats, *params)
+    games_10 = await conn.fetchval(sql_games_10, *params)
+    games_100 = await conn.fetchval(sql_games_100, *params)
+    users = await conn.fetchval(sql_users, *params)
+    pro = await conn.fetchval(sql_pro, *params)
+    free = users - pro
+
+    return chats, games_10, games_100, users, free, pro
 
 # ==========================================
 # ЛОГІКА ХЕНДЛЕРІВ
 # ==========================================
 
+# Головні адмінські команди (строго у приватних повідомленнях)
 @dp.message(F.chat.type == "private", Command("free", "pro"))
 async def toggle_admin_status(message: types.Message):
     if message.from_user.id == ADMIN_ID:
         command = message.text.split()[0].replace("/", "").lower()
         if command == "pro":
             await set_user_pro_status(ADMIN_ID, True)
-            await message.reply("⚙️ <b>Адмін-панель:</b> Твій статус змінено на <b>PRO</b> у всіх чатах.")
+            await message.reply("Твій статус Pro")
         else:
             await set_user_pro_status(ADMIN_ID, False)
-            await message.reply("⚙️ <b>Адмін-панель:</b> Твій статус змінено на <b>FREE</b> у всіх чатах.")
+            await message.reply("Твій статус free")
 
-@dp.message(Command("stat"))
+@dp.message(F.chat.type == "private", Command("stat"))
 async def admin_stat(message: types.Message):
-    if message.chat.type == "private" and message.from_user.id == ADMIN_ID:
+    if message.from_user.id == ADMIN_ID:
         pool = await get_db_connection()
         now = datetime.now()
         
         async with pool.acquire() as conn:
-            all_chats = await conn.fetchval("SELECT COUNT(*) FROM games")
-            all_users = await conn.fetchval("SELECT COUNT(*) FROM pro_users")
-            pro_users_count = await conn.fetchval("SELECT COUNT(*) FROM pro_users WHERE is_pro = true")
-            free_users = all_users - pro_users_count
-
-            async def get_stats_delta(delta_days=None, delta_hours=None):
-                if delta_days:
-                    dt = now - timedelta(days=delta_days)
-                elif delta_hours:
-                    dt = now - timedelta(hours=delta_hours)
-                else:
-                    return 0, 0, 0, 0
-                
-                c = await conn.fetchval("SELECT COUNT(*) FROM games WHERE created_at >= $1", dt)
-                u = await conn.fetchval("SELECT COUNT(*) FROM pro_users WHERE created_at >= $1", dt)
-                p = await conn.fetchval("SELECT COUNT(*) FROM pro_users WHERE is_pro = true AND updated_at >= $1", dt)
-                f = u - p
-                return c, u, f, p
-
-            c_24h, u_24h, f_24h, p_24h = await get_stats_delta(delta_hours=24)
-            c_7d, u_7d, f_7d, p_7d = await get_stats_delta(delta_days=7)
-            c_30d, u_30d, f_30d, p_30d = await get_stats_delta(delta_days=30)
-            c_1y, u_1y, f_1y, p_1y = await get_stats_delta(delta_days=365)
+            # Виконуємо запити паралельно через asyncio.gather
+            tasks = [
+                get_db_stats(conn),                      # За весь час
+                get_db_stats(conn, now - timedelta(days=365)), # За рік
+                get_db_stats(conn, now - timedelta(days=30)),  # За 30 днів
+                get_db_stats(conn, now - timedelta(days=7)),   # За 7 днів
+                get_db_stats(conn, now - timedelta(hours=24))  # За 24 години
+            ]
+            res = await asyncio.gather(*tasks)
 
         stat_text = (
             f"ЗА ВЕСЬ ЧАС:\n"
-            f"- всі чати: {all_chats}\n"
-            f"- всі юзери: {all_users}\n"
-            f"- free-юзери: {free_users}\n"
-            f"- pro-юзери: {pro_users_count}\n\n"
+            f"- всі чати: {res[0][0]}\n"
+            f"- всі ігри до 10: {res[0][1]}\n"
+            f"- всі ігри до 100: {res[0][2]}\n"
+            f"- всі юзери: {res[0][3]}\n"
+            f"- free-юзери: {res[0][4]}\n"
+            f"- pro-юзери: {res[0][5]}\n\n"
             f"ПРИРІСТ ЗА РІК:\n"
-            f"- всі чати: +{c_1y}\n"
-            f"- всі юзери: +{u_1y}\n"
-            f"- free-юзери: +{f_1y}\n"
-            f"- pro-юзери: +{p_1y}\n\n"
+            f"- всі чати: +{res[1][0]}\n"
+            f"- всі ігри до 10: +{res[1][1]}\n"
+            f"- всі ігри до 100: +{res[1][2]}\n"
+            f"- всі юзери: +{res[1][3]}\n"
+            f"- free-юзери: +{res[1][4]}\n"
+            f"- pro-юзери: +{res[1][5]}\n\n"
             f"ПРИРІСТ ЗА 30 ДНІВ:\n"
-            f"- всі чати: +{c_30d}\n"
-            f"- всі юзери: +{u_30d}\n"
-            f"- free-юзери: +{f_30d}\n"
-            f"- pro-юзери: +{p_30d}\n\n"
+            f"- всі чати: +{res[2][0]}\n"
+            f"- всі ігри до 10: +{res[2][1]}\n"
+            f"- всі ігри до 100: +{res[2][2]}\n"
+            f"- всі юзери: +{res[2][3]}\n"
+            f"- free-юзери: +{res[2][4]}\n"
+            f"- pro-юзери: +{res[2][5]}\n\n"
             f"ПРИРІСТ ЗА 7 ДНІВ:\n"
-            f"- всі чати: +{c_7d}\n"
-            f"- всі юзери: +{u_7d}\n"
-            f"- free-юзери: +{f_7d}\n"
-            f"- pro-юзери: +{p_7d}\n\n"
+            f"- всі чати: +{res[3][0]}\n"
+            f"- всі ігри до 10: +{res[3][1]}\n"
+            f"- всі ігри до 100: +{res[3][2]}\n"
+            f"- всі юзери: +{res[3][3]}\n"
+            f"- free-юзери: +{res[3][4]}\n"
+            f"- pro-юзери: +{res[3][5]}\n\n"
             f"ПРИРІСТ ЗА 24 ГОД:\n"
-            f"- всі чати: +{c_24h}\n"
-            f"- всі юзери: +{u_24h}\n"
-            f"- free-юзери: +{f_24h}\n"
-            f"- pro-юзери: +{p_24h}"
+            f"- всі чати: +{res[4][0]}\n"
+            f"- всі ігри до 10: +{res[4][1]}\n"
+            f"- всі ігри до 100: +{res[4][2]}\n"
+            f"- всі юзери: +{res[4][3]}\n"
+            f"- free-юзери: +{res[4][4]}\n"
+            f"- pro-юзери: +{res[4][5]}"
         )
         await message.answer(stat_text)
 
 @dp.message(F.chat.type == "private")
 async def private_stub(message: types.Message):
-    if message.from_user.id == ADMIN_ID and (message.text.startswith("/stat") or message.text.startswith("/free") or message.text.startswith("/pro")):
+    # Якщо це повідомлення від адміна, але не пройшло хендлери вище (не команди /stat, /free, /pro)
+    if message.from_user.id == ADMIN_ID:
         return
+        
     text = (
         "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу).\n\n"
         "Знайдеш мене через пошук – @stofotobot"
@@ -351,7 +391,6 @@ async def show_rules_or_limits(chat_id: int):
 async def start_free_game(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     
-    # Залізобетонна перевірка кількості учасників
     if await check_and_handle_alone(chat_id, callback):
         return
         
@@ -361,6 +400,12 @@ async def start_free_game(callback: types.CallbackQuery):
     
     players, current_word_data = await filter_active_players(chat_id, players, current_word_data)
     
+    # ПІДСТАНОВКА НІКНЕЙМУ ТОГО, ХТО ПОЧАВ ГРУ
+    creator_id = str(callback.from_user.id)
+    creator_name = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.first_name
+    if creator_id not in players:
+        players[creator_id] = {"name": creator_name, "score": 0}
+
     for p_id in players:
         players[p_id]["score"] = 0
         
@@ -394,6 +439,12 @@ async def start_pro_game_active(callback: types.CallbackQuery):
     
     players, current_word_data = await filter_active_players(chat_id, players, current_word_data)
     
+    # ПІДСТАНОВКА НІКНЕЙМУ ТОГО, ХТО ПОЧАВ ГРУ
+    creator_id = str(callback.from_user.id)
+    creator_name = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.first_name
+    if creator_id not in players:
+        players[creator_id] = {"name": creator_name, "score": 0}
+
     for p_id in players:
         players[p_id]["score"] = 0
         
@@ -429,6 +480,12 @@ async def show_pro_payment(callback: types.CallbackQuery):
         
         players, current_word_data = await filter_active_players(chat_id, players, current_word_data)
         
+        # ПІДСТАНОВКА НІКНЕЙМУ ТОГО, ХТО ПОЧАВ ГРУ
+        creator_id = str(callback.from_user.id)
+        creator_name = f"@{callback.from_user.username}" if callback.from_user.username else callback.from_user.first_name
+        if creator_id not in players:
+            players[creator_id] = {"name": creator_name, "score": 0}
+
         for p_id in players:
             players[p_id]["score"] = 0
             
@@ -623,7 +680,6 @@ async def handle_game_photo(message: types.Message):
             ])
             
         # ПЕРЕВІРКА СКЛАДУ ГРУПИ НА КІНЕЦЬ ГРИ:
-        # Якщо прапорець змін True — примусово скидаємо стан на "registration"
         if current_word_data.get("composition_changed"):
             next_status = "registration"
             current_word_data = {}  # Очищуємо прапорці
