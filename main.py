@@ -238,7 +238,7 @@ async def get_db_stats_isolated(pool, dt=None):
 async def toggle_admin_status(message: types.Message):
     if message.from_user.id == ADMIN_ID:
         command = message.text.split()[0].replace("/", "").lower()
-        if command == "pro":
+        if "pro" in command:
             await set_user_pro_status(ADMIN_ID, True)
             await message.reply("Твій статус Pro")
         else:
@@ -251,7 +251,6 @@ async def admin_stat(message: types.Message):
         pool = await get_db_connection()
         now = datetime.now()
         
-        # Асинхронне паралельне виконання всіх запитів статистики через пул підключень
         res0, res1, res2, res3, res4 = await asyncio.gather(
             get_db_stats_isolated(pool),
             get_db_stats_isolated(pool, now - timedelta(days=365)),
@@ -299,15 +298,15 @@ async def admin_stat(message: types.Message):
         )
         await message.answer(stat_text)
 
-# 2. ПОСТ-ЗАГЛУШКА (Для звичайних користувачів у приватних повідомленнях)
+# 2. ПОСТ-ЗАГЛУШКА (Для приватних повідомлень)
 
 @dp.message(F.chat.type == "private")
 async def private_stub(message: types.Message):
-    # Якщо це ти (адміністратор) — бот повністю ігнорує будь-який інший текст чи старт і мовчить
+    # Повне блокування будь-яких повідомлень, тексту чи старту в приваті, якщо пише адмін
     if message.from_user.id == ADMIN_ID:
         return
         
-    # Для всіх інших реальних людей — сувора текстова заглушка без кнопок
+    # Для всіх інших користувачів видається чітка текстова заглушка
     text = "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу). Знайдеш мене по пошуку @stofotobot"
     await message.answer(text)
 
@@ -347,7 +346,6 @@ async def show_rules_or_limits(chat_id: int):
     actual_humans = count - 1 if count > 0 else 1
     has_pro = await check_group_has_pro(chat_id)
 
-    # Логіка для ПЛАТНОЇ гри (Pro)
     if has_pro:
         if actual_humans == 1:
             await bot.send_message(chat_id=chat_id, text="1 людина в групі")
@@ -355,8 +353,6 @@ async def show_rules_or_limits(chat_id: int):
         elif actual_humans > 10:
             await bot.send_message(chat_id=chat_id, text="11 людей в групі")
             return
-
-    # Логіка для БЕЗПЛАТНОЇ гри (Free)
     else:
         if actual_humans == 1:
             await bot.send_message(chat_id=chat_id, text="1 людина в групі")
@@ -365,11 +361,10 @@ async def show_rules_or_limits(chat_id: int):
             await bot.send_message(chat_id=chat_id, text="3 людини в групі")
             return
 
-    # Пост із правилами (відпрацьовує, якщо для Free людей рівно 2, а для Pro людей від 2 до 10)
     text = (
         "Правила гри:\n\n"
         "1. Завдання гравців – фотографувати числа (1, 2, 3) і надсилати у чат. Хто перший – отримує 1 бал.\n\n"
-        "2. Кожен раунд = 1 фото / 1 бал. Безоплатна гра триває 10 раундів, платна – 100.\n\n"
+        "2. Кожен раунд = 1 photo / 1 бал. Безоплатна гра триває 10 раундів, платна – 100.\n\n"
         "3. Не можна викладати числа предметами чи писати самому. Можна лише фотографувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна брати двічі числа з однієї локації (сторінки книги, кнопки ліфту тощо). Локації мають бути різними.\n\n"
         "5. Якщо надіслане фото не відповідає завданню, його можна відмінити і почати раунд заново.\n\n"
