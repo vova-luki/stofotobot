@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command, ChatMemberUpdatedFilter, JOIN_TRANSITION
@@ -71,7 +72,7 @@ async def init_db():
             );
         ''')
         
-        # Автоматичний апгрейд структури для бази на Supabase
+        # Автоматичний апгрейд структури для база на Supabase
         await conn.execute('''
             ALTER TABLE games ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
         ''')
@@ -80,6 +81,17 @@ async def init_db():
         ''')
         await conn.execute('''
             ALTER TABLE pro_users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+        ''')
+        
+        # Заповнюємо порожні значення created_at для старих записів, щоб працювала статистика
+        await conn.execute('''
+            UPDATE games SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL;
+        ''')
+        await conn.execute('''
+            UPDATE pro_users SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL;
+        ''')
+        await conn.execute('''
+            UPDATE pro_users SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL;
         ''')
         
         logger.info("Таблиці в БД перевірено та успішно оновлено.")
@@ -237,7 +249,14 @@ async def get_db_stats_isolated(pool, dt=None):
         games_100 = await conn.fetchval(sql_games_100, *params)
         users = await conn.fetchval(sql_users, *params)
         pro = await conn.fetchval(sql_pro, *params)
-        free = users - pro
+        
+        # Надійна підстраховка: якщо значень немає (база пуста), повертаємо 0
+        chats = chats if chats is not None else 0
+        games_10 = games_10 if games_10 is not None else 0
+        games_100 = games_100 if games_100 is not None else 0
+        users = users if users is not None else 0
+        pro = pro if pro is not None else 0
+        free = users - pro if users >= pro else 0
 
     return chats, games_10, games_100, users, free, pro
 
@@ -323,7 +342,7 @@ async def private_stub(message: types.Message):
     text = "Щоб грати, додай мене у групу з іншими людьми (не в особисті чати, а саме у групу). Знайдеш мене по пошуку @stofotobot"
     await message.answer(text)
 
-# 3. ЛОГІКА ДЛЯ РОБОТОУ У ГРУПАХ
+# 3. ЛОГІКА ДЛЯ РОБОТИ У ГРУПАХ
 
 @dp.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def bot_added_to_group(event: types.ChatMemberUpdated):
@@ -380,7 +399,8 @@ async def show_rules_or_limits(chat_id: int):
         "2. Кожен раунд = 1 photo / 1 бал. Безоплатна гра триває 10 раундів, платна – 100.\n\n"
         "3. Не можна викладати числа предметами чи писати самому. Можна лише фотографувати їх вдома, на вулиці тощо.\n\n"
         "4. Не можна брати двічі числа з однієї локації (сторінки книги, кнопки ліфту тощо). Локації мають бути різними.\n\n"
-        "5. Якщо надіслане photo не відповідає завданню, його можна відмінити і почати раунд заново.\n\n"
+        "5. Якщо надіслане фото не відповідає завданню, його можна відмінити і почати раунд заново.\n\n"
+        "Бот реагує лише на фото і кнопки, тож можете вільно спілкуватись у чаті.\n\n"
         "Щоб перезапустити бота, напишіть /start або /play.\n\n"
         "Придумайте приз і гоу!"
     )
@@ -804,7 +824,7 @@ async def mono_webhook(request: Request):
 
 @app.get("/")
 async def root():
-    return {"status": "working", "bot": "100_photo_bot"}
+    return JSONResponse(content={"status": "working", "bot": "100_photo_bot"}, headers={"Content-Type": "application/json; charset=utf-8"})
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
