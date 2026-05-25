@@ -150,7 +150,16 @@ def round_text(round_number: int, players: dict[str, dict[str, Any]]) -> str:
     return f"Раунд {round_number}\n\nРахунок\n{scoreboard(players)}\n\n{task}"
 
 
-def final_text(winner_name: str, players: dict[str, dict[str, Any]]) -> str:
+def final_text(players: dict[str, dict[str, Any]]) -> str:
+    ordered_players = sorted_players(players)
+    top_score = max((int(player.get("score", 0)) for _, player in ordered_players), default=0)
+    winners = [player["name"] for _, player in ordered_players if int(player.get("score", 0)) == top_score]
+
+    if len(winners) > 1:
+        winners_text = "\n".join(winners)
+        return f"Переможці:\n{winners_text}\n\nРахунок\n{scoreboard(players)}\n\nНе забудь про свій приз!"
+
+    winner_name = winners[0] if winners else "player 1"
     return f"Переможець: {winner_name}\n\nРахунок\n{scoreboard(players)}\n\nНе забудь про свій приз!"
 
 
@@ -945,7 +954,7 @@ async def handle_photo(message: types.Message) -> None:
     if round_number >= limit:
         await save_session(message.chat.id, STATUS_FINISHED, mode, round_number, players, message.from_user.id, session["current_game_id"])
         await update_game_history_players(session["current_game_id"], players)
-        await safe_answer_message(message, final_text(user_display_name(message.from_user), players), final_keyboard(mode))
+        await safe_answer_message(message, final_text(players), final_keyboard(mode))
         return
 
     next_round = round_number + 1
