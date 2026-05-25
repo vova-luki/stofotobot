@@ -241,18 +241,17 @@ async def send_current_round_post(chat_id: int, game: dict):
         )
         
     if status == "playing_free" or round_num == 1:
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=(
-                    ([[InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {round_num - 1}", callback_data=f"clear_round_{round_num - 1}")]] if round_num > 1 and game.get("round_number") == round_num else []) +
-                    [[InlineKeyboardButton(text="НОВА ГРА", callback_data="start_free_10")]]
-                )
-            )
-        else:
-            buttons = []
-            if round_num > 1 and game.get("round_number") == round_num:
-                buttons.append([InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {round_num - 1}", callback_data=f"clear_round_{round_num - 1}")])
-            buttons.append([InlineKeyboardButton(text="НОВА ГРА", callback_data="start_pro_game_active")])
-            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=(
+            [[InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {round_num - 1}", callback_data=f"clear_round_{round_num - 1}")] if round_num > 1 else []) +
+            [[InlineKeyboardButton(text="НОВА ГРА", callback_data="start_free_10")]]
+        )
+    )
+else:
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {round_num - 1}", callback_data=f"clear_round_{round_num - 1}")],
+        [InlineKeyboardButton(text="НОВА ГРА", callback_data="start_pro_game_active")]
+    ])
         
     await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
 
