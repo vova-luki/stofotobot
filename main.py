@@ -241,9 +241,9 @@ async def send_current_round_post(chat_id: int, game: dict):
         )
         
     if status == "playing_free" or round_num == 1:
-        kb = InlineKeyboardMarkup(
+            kb = InlineKeyboardMarkup(
             inline_keyboard=(
-                [[InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {round_num - 1}", callback_data=f"clear_round_{round_num - 1}")] if round_num > 1 else []) +
+                ([[InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {round_num - 1}", callback_data=f"clear_round_{round_num - 1}")]] if round_num > 1 else []) +
                 [[InlineKeyboardButton(text="НОВА ГРА", callback_data="start_free_10")]]
             )
         )
