@@ -232,7 +232,7 @@ async def send_current_round_post(chat_id: int, game: dict):
             f"{scoreboard}\n\n"
             f"Завдання: сфотографуй число 1."
         )
-    else:
+   else:
         text = (
             f"Раунд {round_num}\n\n"
             f"Рахунок\n"
@@ -241,10 +241,12 @@ async def send_current_round_post(chat_id: int, game: dict):
         )
         
     if status == "playing_free" or round_num == 1:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            *([[InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {round_num - 1}", callback_data=f"clear_round_{round_num - 1}")] if round_num > 1 else []),
-            [InlineKeyboardButton(text="НОВА ГРА ДО 10", callback_data="start_free_10")]
-        ])
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=(
+                [[InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {round_num - 1}", callback_data=f"clear_round_{round_num - 1}")] if round_num > 1 else []) +
+                [[InlineKeyboardButton(text="НОВА ГРА", callback_data="start_free_10")]]
+            )
+        )
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"ОБНУЛИТИ РАУНД {round_num - 1}", callback_data=f"clear_round_{round_num - 1}")],
