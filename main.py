@@ -707,9 +707,9 @@ async def send_stats(message: types.Message) -> None:
     ]
 
     async def period_stats(since: datetime | None) -> tuple[int, int, int, int, int, int]:
-        date_clause_sessions = "AND created_at >= $2" if since else ""
-        date_clause_history = "AND created_at >= $2" if since else ""
-        date_clause_users = "AND created_at >= $2" if since else ""
+        date_clause_sessions = "AND bot_game_sessions.created_at >= $2" if since else ""
+        date_clause_history = "AND bot_game_history.created_at >= $2" if since else ""
+        date_clause_users = "AND users.created_at >= $2" if since else ""
         text_params: list[Any] = [str(ADMIN_ID)]
         int_params: list[Any] = [ADMIN_ID]
         if since:
